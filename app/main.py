@@ -1,0 +1,13 @@
+"""FastAPI application entrypoint.
+
+Builds the app and mounts routers. Per project convention, routers stay thin and
+this module owns no business logic — it only wires things together.
+"""
+
+from fastapi import FastAPI
+
+from app.api import health
+
+app = FastAPI(title="Fiets of OV", version="0.0.0")
+
+app.include_router(health.router)

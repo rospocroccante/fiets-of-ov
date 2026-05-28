@@ -1,0 +1,45 @@
+[project]
+name = "fiets-of-ov"
+version = "0.0.0"
+description = "Bike-or-public-transport advice for Amsterdam, given the short-term rain forecast."
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.5",
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "respx>=0.21",
+    "ruff>=0.7",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+# pycodestyle, pyflakes, isort, pyupgrade, bugbear
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+filterwarnings = [
+    "error",
+    # Starlette's TestClient warns about httpx on newer interpreters (e.g. local 3.14);
+    # the project targets 3.12 where it doesn't fire. Narrow ignore, not a blanket one.
+    "ignore:Using `httpx` with `starlette.testclient`",
+]

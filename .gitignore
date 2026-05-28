@@ -1,0 +1,29 @@
+# Vault symlink (each dev sets up their own; never commit notes into the repo)
+/vault
+
+# Local-only project docs (kept out of the public repo)
+CLAUDE.md
+ROADMAP.md
+
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Harness / agent artifacts
+.claude/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
