@@ -15,9 +15,14 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    # Plannerstack demo by default; repoint at a self-hosted OTP later.
-    otp_base_url: str = "https://otp.plannerstack.io/otp/routers/default"
+    # Host root of a self-hosted OTP2 instance; the client appends the GTFS GraphQL path.
+    otp_base_url: str = "http://localhost:8080"
     buienradar_url: str = "https://gpsgadget.buienradar.nl/data/raintext"
+
+    # Nominatim forward-geocoding (place name -> coordinates). Its usage policy requires
+    # an identifying User-Agent; override the default to something contactable in prod.
+    nominatim_url: str = "https://nominatim.openstreetmap.org/search"
+    geocoder_user_agent: str = "fiets-of-ov/0.1 (https://github.com/fiets-of-ov)"
 
     # A single, deliberately short ceiling for every external call. Upstreams are
     # untrusted; we would rather fail fast and degrade than hang a request.

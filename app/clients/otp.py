@@ -1,22 +1,49 @@
-"""Async client for OpenTripPlanner's classic REST `/plan` endpoint.
+"""Async client for OpenTripPlanner's OTP2 **GTFS GraphQL** API (`/otp/gtfs/v1`).
 
-OTP does the multimodal routing; this wrapper only adapts it to typed data and
-enforces our trust boundary. Things to know:
+OTP does the multimodal routing; this wrapper adapts it to typed data and enforces our
+trust boundary. OTP2 dropped the old REST `/plan` endpoint in favour of GraphQL, so we
+POST a `plan` query and read `data.plan.itineraries`. Things to know:
 
-- OTP is treated as **untrusted**. Every call is bounded by an explicit timeout, and
-  any failure mode — non-2xx status, a transport error, an `error` payload, or a
-  response with no `plan` — raises `OTPError`. We never invent a route on failure;
-  callers surface a clear error instead.
-- Times come back as **epoch milliseconds** (`startTime`/`endTime`). We keep them as
-  ints rather than guessing a timezone here; the decision engine reconciles them with
-  the Buienradar forecast in a later phase.
-- The JSON uses camelCase; the models map it to snake_case via field aliases.
+- OTP is treated as **untrusted**. Every call is bounded by an explicit timeout, and any
+  failure mode — non-2xx status, a transport error, GraphQL `errors`, or a null `plan` —
+  raises `OTPError`. We never invent a route on failure; callers surface a clear error.
+- Itinerary/leg `startTime`/`endTime` are **epoch milliseconds**; we keep them as ints
+  rather than guessing a timezone here. The decision engine reconciles them with the
+  Buienradar forecast.
+- A leg's `route` is null for non-transit legs (walk/bike); for transit legs we read
+  `route.shortName` (e.g. "13" for tram 13).
+- `mode` is a comma-separated string ("BICYCLE", "TRANSIT,WALK") mapped to the GraphQL
+  `transportModes` list, so callers don't need to know the GraphQL shape.
 """
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.config import get_settings
+
+# GTFS GraphQL endpoint path appended to the OTP host root.
+_GRAPHQL_PATH = "/otp/gtfs/v1"
+
+# `startTime`/`endTime` are epoch-ms Longs in the GTFS API; `route` is null off-transit.
+_PLAN_QUERY = """
+query Plan($from: InputCoordinates!, $to: InputCoordinates!, $modes: [TransportMode!], $num: Int) {
+  plan(from: $from, to: $to, transportModes: $modes, numItineraries: $num) {
+    itineraries {
+      duration
+      startTime
+      endTime
+      legs {
+        mode
+        startTime
+        endTime
+        duration
+        distance
+        route { shortName }
+      }
+    }
+  }
+}
+"""
 
 
 class OTPError(Exception):
@@ -49,17 +76,50 @@ class Itinerary(BaseModel):
 
 
 class Plan(BaseModel):
-    """The `plan` block of an OTP response: the candidate itineraries."""
+    """The candidate itineraries returned for a trip."""
 
     itineraries: list[Itinerary]
 
 
+def first_transit_itinerary(plan: Plan) -> Itinerary | None:
+    """First itinerary that actually rides transit, or None if none does.
+
+    OTP quirk: a `TRANSIT,WALK` plan can include WALK-only itineraries as fallbacks
+    (often ordered first when walking the whole trip is feasible). Those are useless as
+    a rain alternative — walking leaves the rider just as wet as cycling — so we skip
+    them and return the first itinerary with at least one non-WALK leg.
+    """
+    for itinerary in plan.itineraries:
+        if any(leg.mode != "WALK" for leg in itinerary.legs):
+            return itinerary
+    return None
+
+
+def _to_transport_modes(mode: str) -> list[dict[str, str]]:
+    """Map a comma-separated mode string to the GraphQL `transportModes` list."""
+    return [{"mode": part.strip()} for part in mode.split(",") if part.strip()]
+
+
+def _leg_from_graphql(raw: dict) -> Leg:
+    """Build a Leg from a GraphQL leg node, flattening `route.shortName`."""
+    route = raw.get("route") or {}
+    return Leg(
+        mode=raw["mode"],
+        start_time=raw["startTime"],
+        end_time=raw["endTime"],
+        duration=raw["duration"],
+        distance=raw.get("distance"),
+        route_short_name=route.get("shortName"),
+    )
+
+
 class OTPClient:
-    """Queries OTP for itineraries between two coordinates for a given mode."""
+    """Queries a self-hosted OTP2 instance for itineraries via the GTFS GraphQL API."""
 
     def __init__(self, base_url: str | None = None, timeout: float | None = None) -> None:
         settings = get_settings()
-        self._base_url = base_url or settings.otp_base_url
+        root = (base_url or settings.otp_base_url).rstrip("/")
+        self._graphql_url = f"{root}{_GRAPHQL_PATH}"
         self._timeout = timeout if timeout is not None else settings.request_timeout_seconds
 
     async def plan(
@@ -71,25 +131,40 @@ class OTPClient:
     ) -> Plan:
         """Return OTP's itineraries for `from_place` -> `to_place` using `mode`.
 
-        `from_place`/`to_place` are `(lat, lon)`; `mode` is an OTP mode string
-        (e.g. "BICYCLE", "TRANSIT,WALK"). Raises `OTPError` on any failure so the
-        caller never receives a fabricated route.
+        `from_place`/`to_place` are `(lat, lon)`; `mode` is a comma-separated mode string
+        (e.g. "BICYCLE", "TRANSIT,WALK"). Raises `OTPError` on any failure so the caller
+        never receives a fabricated route.
         """
-        params = {
-            "fromPlace": f"{from_place[0]},{from_place[1]}",
-            "toPlace": f"{to_place[0]},{to_place[1]}",
-            "mode": mode,
+        variables = {
+            "from": {"lat": from_place[0], "lon": from_place[1]},
+            "to": {"lat": to_place[0], "lon": to_place[1]},
+            "modes": _to_transport_modes(mode),
+            "num": 3,
         }
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
-                response = await client.get(f"{self._base_url}/plan", params=params)
+                response = await client.post(
+                    self._graphql_url, json={"query": _PLAN_QUERY, "variables": variables}
+                )
                 response.raise_for_status()
                 data = response.json()
         except httpx.HTTPError as exc:
             # Covers connect/read timeouts, connection errors, and non-2xx statuses.
             raise OTPError(f"OTP request failed: {exc}") from exc
 
-        if data.get("error") or "plan" not in data:
-            raise OTPError(f"OTP returned no itinerary: {data.get('error') or 'missing plan'}")
+        if data.get("errors"):
+            raise OTPError(f"OTP GraphQL errors: {data['errors']}")
+        plan = (data.get("data") or {}).get("plan")
+        if plan is None:
+            raise OTPError("OTP returned no plan")
 
-        return Plan.model_validate(data["plan"])
+        itineraries = [
+            Itinerary(
+                duration=it["duration"],
+                start_time=it["startTime"],
+                end_time=it["endTime"],
+                legs=[_leg_from_graphql(leg) for leg in it["legs"]],
+            )
+            for it in plan.get("itineraries", [])
+        ]
+        return Plan(itineraries=itineraries)

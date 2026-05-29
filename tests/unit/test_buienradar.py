@@ -46,6 +46,20 @@ async def test_converts_intensity_code_to_mm_per_hour():
 
 
 @respx.mock
+async def test_follows_coordinate_normalisation_redirect():
+    # Buienradar 302-redirects fine-grained coords to a rounded, trailing-slash URL;
+    # the client must follow the redirect rather than choke on the 302.
+    respx.get(URL).mock(
+        return_value=httpx.Response(302, headers={"Location": f"{URL}/?lat=52.38&lon=4.9"})
+    )
+    respx.get(f"{URL}/").mock(return_value=httpx.Response(200, text=SAMPLE))
+
+    forecast = await BuienradarClient(base_url=URL).get_rain_forecast(lat=52.3791, lon=4.9003)
+
+    assert len(forecast.slots) == 3
+
+
+@respx.mock
 async def test_ignores_blank_lines_and_trailing_whitespace():
     respx.get(URL).mock(return_value=httpx.Response(200, text="000|16:00\n\n  \n077|16:05\n"))
 

@@ -84,7 +84,9 @@ class BuienradarClient:
         Raises `httpx.HTTPError` if the request fails or returns a non-2xx status;
         callers decide how to degrade (the resilience phase wires graceful fallback).
         """
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
+        # Buienradar 302-redirects fine-grained coordinates to a rounded, trailing-slash
+        # URL, so we must follow redirects or every real request fails on the 302.
+        async with httpx.AsyncClient(timeout=self._timeout, follow_redirects=True) as client:
             response = await client.get(self._base_url, params={"lat": lat, "lon": lon})
             response.raise_for_status()
         return RainForecast(slots=_parse_raintext(response.text))

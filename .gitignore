@@ -23,6 +23,9 @@ htmlcov/
 # Harness / agent artifacts
 .claude/
 
+# Self-host OTP runtime data (jar, OSM, GTFS, built graph) — large, regenerated locally
+/otp/data/
+
 # OS / editor
 .DS_Store
 .idea/

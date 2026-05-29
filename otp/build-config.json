@@ -1,0 +1,8 @@
+{
+  "transitFeeds": [
+    { "type": "gtfs", "source": "gtfs-gvb.zip" }
+  ],
+  "osm": [
+    { "source": "amsterdam.osm.pbf" }
+  ]
+}
