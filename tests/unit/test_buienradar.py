@@ -8,6 +8,7 @@ traffic is mocked with respx — these tests run fully offline.
 """
 
 import httpx
+import pytest
 import respx
 
 from app.clients.buienradar import BuienradarClient
@@ -66,3 +67,13 @@ async def test_ignores_blank_lines_and_trailing_whitespace():
     forecast = await BuienradarClient(base_url=URL).get_rain_forecast(lat=52.1, lon=5.18)
 
     assert len(forecast.slots) == 2
+
+
+@respx.mock
+async def test_empty_body_raises_rather_than_reporting_dry():
+    # A blank 200 body yields zero slots. That is a broken response, not a dry forecast:
+    # returning it would make the engine confidently say "dry". Raise so callers degrade.
+    respx.get(URL).mock(return_value=httpx.Response(200, text="   \n\n"))
+
+    with pytest.raises(ValueError):
+        await BuienradarClient(base_url=URL).get_rain_forecast(lat=52.1, lon=5.18)

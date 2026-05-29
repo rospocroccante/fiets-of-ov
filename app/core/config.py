@@ -28,6 +28,19 @@ class Settings(BaseSettings):
     # untrusted; we would rather fail fast and degrade than hang a request.
     request_timeout_seconds: float = 10.0
 
+    # Redis-backed cache for the rain forecast. The cache fails open: if Redis is down
+    # the request still runs (just without caching), so this is never a hard dependency.
+    redis_url: str = "redis://localhost:6379/0"
+    # Hard socket/connect ceiling for Redis. The cache is hit on every request, so a
+    # wedged-but-connected Redis must not hang it — kept short (a slow cache is no help).
+    redis_timeout_seconds: float = 2.0
+    # Within this window a cached forecast is served without re-hitting Buienradar
+    # (~5 min matches Buienradar's own update cadence).
+    rain_cache_fresh_seconds: int = 300
+    # How long a forecast is retained for stale-fallback use when Buienradar is down.
+    # Beyond ~2h the forecast horizon is exhausted, so keeping it longer is pointless.
+    rain_cache_retention_seconds: int = 7200
+
     log_level: str = "INFO"
 
 

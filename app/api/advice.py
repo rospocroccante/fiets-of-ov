@@ -10,12 +10,12 @@ them to the pure decision engine, and returns the result. All decision logic liv
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.api.deps import get_buienradar_client, get_geocoder_client, get_otp_client
-from app.clients.buienradar import BuienradarClient
+from app.api.deps import get_geocoder_client, get_otp_client, get_rain_service
 from app.clients.geocoder import GeocodeNotFound, GeocoderClient
 from app.clients.otp import OTPClient, OTPError, first_transit_itinerary
 from app.schemas.advice import AdviceResponse
 from app.services.advice import decide
+from app.services.rain import RainService
 
 router = APIRouter()
 
@@ -58,7 +58,7 @@ async def get_advice(
         alias="to", description="Destination: place name (e.g. 'Vondelpark') or 'lat,lon'"
     ),
     otp: OTPClient = Depends(get_otp_client),
-    rain_client: BuienradarClient = Depends(get_buienradar_client),
+    rain_service: RainService = Depends(get_rain_service),
     geocoder: GeocoderClient = Depends(get_geocoder_client),
 ) -> AdviceResponse:
     """Return a bike-vs-OV recommendation for the trip `from` -> `to`."""
@@ -86,11 +86,10 @@ async def get_advice(
     except OTPError:
         transit = None
 
-    # Rain is overlaid at the origin. Graceful degradation when Buienradar is down is a
-    # later (resilience) phase; for now a rain-data failure is a clear upstream error.
-    try:
-        rain = await rain_client.get_rain_forecast(lat=from_place[0], lon=from_place[1])
-    except httpx.HTTPError as exc:
-        raise HTTPException(status_code=502, detail="rain data unavailable") from exc
+    # Rain is overlaid at the origin. The rain service handles caching and graceful
+    # degradation: if Buienradar is down with no usable cache it returns None, and the
+    # engine still answers (bike-first, forecast flagged unknown). So we never 502 here —
+    # one flaky upstream must not take down the whole recommendation.
+    rain = await rain_service.get_forecast(lat=from_place[0], lon=from_place[1])
 
     return decide(bike=bike, transit=transit, rain=rain)

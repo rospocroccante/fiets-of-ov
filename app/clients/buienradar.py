@@ -67,6 +67,11 @@ def _parse_raintext(text: str) -> list[RainSlot]:
                 mm_per_h=_intensity_to_mm_per_h(code),
             )
         )
+    if not slots:
+        # A blank/whitespace-only body is a broken response, not a dry forecast. Returning
+        # an empty forecast would make the engine confidently report "dry"; raise instead
+        # so the rain service degrades to an honest "unavailable".
+        raise ValueError("empty raintext response")
     return slots
 
 
@@ -81,8 +86,9 @@ class BuienradarClient:
     async def get_rain_forecast(self, *, lat: float, lon: float) -> RainForecast:
         """Return the ~2h precipitation forecast for `(lat, lon)` as typed mm/h slots.
 
-        Raises `httpx.HTTPError` if the request fails or returns a non-2xx status;
-        callers decide how to degrade (the resilience phase wires graceful fallback).
+        Raises `httpx.HTTPError` if the request fails or returns a non-2xx status, or
+        `ValueError` if a 2xx body can't be parsed as raintext (including an empty body).
+        Callers decide how to degrade — the rain service treats both as "unavailable".
         """
         # Buienradar 302-redirects fine-grained coordinates to a rounded, trailing-slash
         # URL, so we must follow redirects or every real request fails on the 302.

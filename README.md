@@ -4,7 +4,7 @@
 
 **Fiets of OV** is a Python/FastAPI service that recommends **cycling** or **public transport** for a trip, based on the short-term rain forecast. It does not route itself — it delegates routing to **[OpenTripPlanner](https://www.opentripplanner.org/)**, overlays **[Buienradar](https://www.buienradar.nl/)** precipitation data, and returns a recommendation with a human-readable reason:
 
-> *"dry until 14:25 → bike"* &nbsp;·&nbsp; *"rain in 15 min → tram 13 in 4 min"*
+> *"dry during your 24-min ride → bike"* &nbsp;·&nbsp; *"rain around 14:05 → take tram 13"*
 
 [![Python 3.12](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
@@ -13,17 +13,54 @@
 
 ## How it works
 
-For a trip, the service fetches the bike itinerary and the best public-transport itinerary from OpenTripPlanner, overlays the next ~2 hours of rain from Buienradar, and runs a small decision engine that picks the better option and explains why. Routing is delegated; the value added here is the rain-aware decision layer on top.
+For a trip, the service resolves the endpoints (a place name *or* coordinates), fetches the bike itinerary and the best public-transport itinerary from OpenTripPlanner, overlays the next ~2 hours of rain from Buienradar, and runs a small **pure decision engine** that picks the better option and explains why. Routing is delegated; the value added here is the rain-aware decision layer — and the resilience around the upstreams.
 
 ```mermaid
 flowchart LR
-    client([Client]) -->|"GET /v1/advice"| api["FastAPI"]
+    client([Client]) -->|"GET /v1/advice?from=&to="| api["FastAPI"]
+    api --> geo["Geocoder"] -.names→coords.-> nom[("Nominatim / OSM")]
     api --> otp["OTP client"] -.routing.-> otpsvc[("OpenTripPlanner")]
-    api --> rain["Buienradar client"] -.precipitation.-> brsvc[("Buienradar")]
+    api --> rain["Rain service"]
+    rain -->|cache| redis[("Redis")]
+    rain -.precipitation.-> brsvc[("Buienradar")]
     otp -->|"bike + transit itineraries"| engine{{"Decision engine"}}
-    rain -->|"~2h forecast"| engine
+    rain -->|"~2h forecast (or none)"| engine
     engine -->|"recommendation + reason"| api -->|"JSON"| client
 ```
+
+## The endpoint
+
+```
+GET /v1/advice?from=<place|lat,lon>&to=<place|lat,lon>
+```
+
+`from`/`to` accept **either** a place name (geocoded via Nominatim, bounded to Amsterdam) **or** explicit `lat,lon` coordinates.
+
+```bash
+curl "localhost:8000/v1/advice?from=Amsterdam%20Centraal&to=Vondelpark"
+```
+
+```json
+{
+  "recommendation": "bike",
+  "reason": "dry during your 24-min ride (rain only from 15:40) → bike",
+  "bike_minutes": 24,
+  "transit_minutes": 30,
+  "max_rain_mm_per_h": 0.0,
+  "rain_expected": false
+}
+```
+
+The decision is driven by **rain, not speed**: a dry ride → bike; rain during the ride → public transport (so you stay dry), falling back to bike-with-a-warning when there's no transit option. See [`app/services/advice.py`](app/services/advice.py).
+
+## Resilience
+
+One flaky upstream must never take down a recommendation:
+
+- **Caching** — the Buienradar forecast is cached in Redis (≈5 min fresh window, served without re-hitting the API; 2 h retention for fallback).
+- **Graceful degradation** — if Buienradar is unavailable, the service serves a recent **stale** forecast if it has one; otherwise it returns a bike-first answer with the forecast flagged as unknown (`rain_expected` / `max_rain_mm_per_h` are `null`) — never a 502.
+- **Fail-open cache** — Redis is an optimisation, not a dependency: if it's down or slow (bounded by a socket timeout), the request still runs.
+- **Bounded everything** — every external call (OTP, Buienradar, Nominatim, Redis) has an explicit timeout.
 
 ## Quick start
 
@@ -38,21 +75,38 @@ uvicorn app.main:app --reload         # http://localhost:8000
 curl localhost:8000/health            # {"status":"ok"}
 ```
 
+> Live routing needs a reachable OpenTripPlanner at `OTP_BASE_URL`. There's no usable public OTP for Amsterdam, so run the **self-hosted OTP overlay** — see [`otp/README.md`](otp/README.md) (`docker compose -f docker-compose.yml -f docker-compose.otp.yml up`). Redis is optional in dev: without it the cache simply fails open.
+
+## Configuration
+
+All config comes from `.env` (see [`.env.example`](.env.example)); never commit `.env`.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `OTP_BASE_URL` | `http://localhost:8080` | OTP2 host root (client appends the GTFS GraphQL path) |
+| `BUIENRADAR_URL` | `…/data/raintext` | Buienradar precipitation feed |
+| `NOMINATIM_URL` | `…/search` | Forward geocoder for place names |
+| `GEOCODER_USER_AGENT` | `fiets-of-ov/0.1 …` | Identifying UA — **required** by Nominatim's usage policy |
+| `REDIS_URL` | `redis://localhost:6379/0` | Forecast cache (fail-open) |
+| `REQUEST_TIMEOUT_SECONDS` | `10` | Ceiling for every external HTTP call |
+| `REDIS_TIMEOUT_SECONDS` | `2` | Redis socket/connect timeout |
+
 ## Development
 
 ```bash
-pytest                          # run the tests
+pytest                          # run the tests (fully offline; respx mocks the upstreams)
 ruff check . && ruff format .   # lint, then auto-format
 ```
 
 ## Tech stack
 
-Python 3.12 · FastAPI + Uvicorn · Pydantic v2 · httpx (async) · pytest + respx · Ruff.
+Python 3.12 · FastAPI + Uvicorn · Pydantic v2 · httpx (async) · Redis · pytest + respx · Ruff.
 
 ## Attribution
 
 - Rain data © **[Buienradar](https://www.buienradar.nl/)**.
 - Routing via **[OpenTripPlanner](https://www.opentripplanner.org/)**.
+- Geocoding © **[OpenStreetMap](https://www.openstreetmap.org/copyright)** contributors, via **[Nominatim](https://nominatim.org/)**.
 
 ## License
 

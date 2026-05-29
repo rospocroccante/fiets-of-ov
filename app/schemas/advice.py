@@ -17,6 +17,8 @@ class AdviceResponse(BaseModel):
     reason: str
     bike_minutes: int
     transit_minutes: int | None
-    # Peak precipitation (mm/h) forecast during the cycling window; 0.0 when dry.
-    max_rain_mm_per_h: float
-    rain_expected: bool
+    # Peak precipitation (mm/h) forecast during the cycling window; 0.0 when dry,
+    # None when the rain forecast was unavailable (degraded answer).
+    max_rain_mm_per_h: float | None
+    # True/False when we have a forecast; None when rain data was unavailable.
+    rain_expected: bool | None

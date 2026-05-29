@@ -10,6 +10,9 @@ from functools import lru_cache
 from app.clients.buienradar import BuienradarClient
 from app.clients.geocoder import GeocoderClient
 from app.clients.otp import OTPClient
+from app.core.cache import Cache, RedisCache
+from app.core.config import get_settings
+from app.services.rain import RainService
 
 
 def get_otp_client() -> OTPClient:
@@ -30,3 +33,20 @@ def get_geocoder_client() -> GeocoderClient:
     survives across requests, sparing Nominatim repeat lookups for the same names.
     """
     return GeocoderClient()
+
+
+@lru_cache
+def get_cache() -> Cache:
+    """Provide the process-wide Redis cache (singleton, so its connection pool is reused)."""
+    return RedisCache()
+
+
+def get_rain_service() -> RainService:
+    """Provide the rain service: Buienradar wrapped in caching + graceful degradation."""
+    settings = get_settings()
+    return RainService(
+        get_buienradar_client(),
+        get_cache(),
+        fresh_seconds=settings.rain_cache_fresh_seconds,
+        retention_seconds=settings.rain_cache_retention_seconds,
+    )

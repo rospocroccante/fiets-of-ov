@@ -63,12 +63,29 @@ def decide(
     *,
     bike: Itinerary,
     transit: Itinerary | None,
-    rain: RainForecast,
+    rain: RainForecast | None,
     rain_threshold_mm_h: float = DEFAULT_RAIN_THRESHOLD_MM_H,
 ) -> AdviceResponse:
-    """Recommend bike or transit for a trip, given the short-term rain forecast."""
+    """Recommend bike or transit for a trip, given the short-term rain forecast.
+
+    `rain` is None when the forecast is unavailable (Buienradar down and no usable
+    cache). We can't assess the weather, so we degrade rather than fail: default to
+    bike — the app is bike-first — and say plainly that the forecast is unknown.
+    """
     bike_minutes = _minutes(bike.duration)
     transit_minutes = _minutes(transit.duration) if transit is not None else None
+
+    # Step 0: no forecast at all -> honest, bike-first degraded answer. The rain fields
+    # are None (not 0.0) so clients can tell "dry" apart from "we don't know".
+    if rain is None:
+        return AdviceResponse(
+            recommendation="bike",
+            reason=f"rain forecast unavailable → bike ({bike_minutes} min)",
+            bike_minutes=bike_minutes,
+            transit_minutes=transit_minutes,
+            max_rain_mm_per_h=None,
+            rain_expected=None,
+        )
 
     # Step 1: the cycling window, in local time-of-day.
     ride_start = _local_time(bike.start_time)

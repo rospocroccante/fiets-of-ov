@@ -111,3 +111,17 @@ def test_rain_but_no_transit_recommends_bike_with_warning():
     assert advice.transit_minutes is None
     # No alternative exists, so it must still pick bike but flag the rain.
     assert "rain" in advice.reason.lower()
+
+
+def test_no_rain_data_degrades_to_bike():
+    # Buienradar unavailable -> rain is None. The engine must still answer: default to
+    # bike (the app is bike-first) and be honest that the forecast is unknown, rather
+    # than crash or invent a forecast.
+    advice = decide(bike=bike_itinerary(), transit=tram_itinerary(), rain=None)
+
+    assert advice.recommendation == "bike"
+    assert advice.rain_expected is None
+    assert advice.max_rain_mm_per_h is None
+    assert advice.bike_minutes == 20
+    assert advice.transit_minutes == 12
+    assert "unavailable" in advice.reason.lower()

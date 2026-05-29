@@ -16,11 +16,13 @@ import pytest
 import respx
 from fastapi.testclient import TestClient
 
-from app.api.deps import get_buienradar_client, get_geocoder_client, get_otp_client
+from app.api.deps import get_geocoder_client, get_otp_client, get_rain_service
 from app.clients.buienradar import BuienradarClient
 from app.clients.geocoder import GeocodeNotFound
 from app.clients.otp import OTPClient
+from app.core.cache import InMemoryCache
 from app.main import app
+from app.services.rain import RainService
 
 TZ = ZoneInfo("Europe/Amsterdam")
 OTP_URL = "http://otp.test"  # host root; client appends /otp/gtfs/v1
@@ -120,10 +122,21 @@ class _FakeGeocoder:
         return self._PLACES[key]
 
 
+def _rain_service() -> RainService:
+    # Real rain service over a fresh in-memory cache, pointed at the mocked Buienradar.
+    # Exercises the actual caching + degradation path instead of stubbing it out.
+    return RainService(
+        BuienradarClient(base_url=RAIN_URL),
+        InMemoryCache(),
+        fresh_seconds=300,
+        retention_seconds=7200,
+    )
+
+
 @pytest.fixture(autouse=True)
 def _override_clients():
     app.dependency_overrides[get_otp_client] = lambda: OTPClient(base_url=OTP_URL)
-    app.dependency_overrides[get_buienradar_client] = lambda: BuienradarClient(base_url=RAIN_URL)
+    app.dependency_overrides[get_rain_service] = _rain_service
     app.dependency_overrides[get_geocoder_client] = _FakeGeocoder
     yield
     app.dependency_overrides.clear()
@@ -262,6 +275,27 @@ def test_transit_unavailable_still_returns_bike():
     body = response.json()
     assert body["recommendation"] == "bike"
     assert body["transit_minutes"] is None
+
+
+@respx.mock
+def test_buienradar_down_degrades_to_bike():
+    # One flaky upstream must not take down the recommendation: with Buienradar failing
+    # and nothing cached, the endpoint still answers (bike-first, forecast flagged unknown).
+    respx.post(GQL_URL).mock(
+        side_effect=_otp_by_mode(
+            httpx.Response(200, json=BIKE_JSON), httpx.Response(200, json=TRANSIT_JSON)
+        )
+    )
+    respx.get(RAIN_URL).mock(return_value=httpx.Response(503))
+
+    response = TestClient(app).get("/v1/advice", params={"from": "52.37,4.89", "to": "52.35,4.86"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["recommendation"] == "bike"
+    assert body["rain_expected"] is None
+    assert body["max_rain_mm_per_h"] is None
+    assert "unavailable" in body["reason"].lower()
 
 
 @respx.mock
