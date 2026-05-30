@@ -15,6 +15,9 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
+    # Async SQLAlchemy URL for Postgres (asyncpg driver). Holds the GVB stops (Phase 4).
+    database_url: str = "postgresql+asyncpg://fiets:fiets@localhost:5432/fiets"
+
     # Host root of a self-hosted OTP2 instance; the client appends the GTFS GraphQL path.
     otp_base_url: str = "http://localhost:8080"
     buienradar_url: str = "https://gpsgadget.buienradar.nl/data/raintext"
