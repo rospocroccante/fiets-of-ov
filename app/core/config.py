@@ -44,6 +44,17 @@ class Settings(BaseSettings):
     # Beyond ~2h the forecast horizon is exhausted, so keeping it longer is pointless.
     rain_cache_retention_seconds: int = 7200
 
+    # JWT auth (Phase 5). The secret signs/validates access tokens; the dev default is a
+    # placeholder and MUST be overridden in prod via JWT_SECRET. It is ≥32 bytes so it
+    # clears PyJWT's HS256 key-length floor — a genuinely short prod secret still triggers
+    # PyJWT's InsecureKeyLengthWarning (we no longer suppress it). HS256 is symmetric,
+    # which fits a single-service deployment (no need to distribute a public key).
+    jwt_secret: str = "dev-insecure-change-me-override-in-production"
+    jwt_algorithm: str = "HS256"
+    # Access-token lifetime. Kept short-ish so a leaked token's blast radius is bounded;
+    # there is no refresh-token flow in the MVP, so this is the full session length.
+    access_token_expire_minutes: int = 60
+
     log_level: str = "INFO"
 
 

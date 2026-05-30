@@ -15,32 +15,21 @@ from app.clients.geocoder import GeocodeNotFound, GeocoderClient
 from app.clients.otp import OTPClient, OTPError, first_transit_itinerary
 from app.schemas.advice import AdviceResponse
 from app.services.advice import decide
+from app.services.places import resolve_place
 from app.services.rain import RainService
 
 router = APIRouter()
 
 
-def _try_parse_latlon(value: str) -> tuple[float, float] | None:
-    """Parse a `"lat,lon"` value into floats, or None if it isn't a coordinate pair."""
-    try:
-        lat_str, lon_str = value.split(",")
-        return float(lat_str), float(lon_str)
-    except ValueError:
-        return None
-
-
 async def _resolve_place(value: str, geocoder: GeocoderClient) -> tuple[float, float]:
-    """Resolve a `from`/`to` value to `(lat, lon)`.
+    """Resolve a `from`/`to` value to `(lat, lon)`, mapping domain errors to HTTP.
 
-    Accepts either explicit `"lat,lon"` coordinates (resolved locally, no network) or a
-    place name (geocoded via Nominatim). An unresolvable name is the caller's mistake
-    (HTTP 400); a geocoder outage is an upstream failure (HTTP 502).
+    Delegates the parse-or-geocode decision to `resolve_place`; this wrapper only
+    translates its domain errors into HTTP status codes: an unresolvable name is the
+    caller's mistake (400), a geocoder outage is an upstream failure (502).
     """
-    coords = _try_parse_latlon(value)
-    if coords is not None:
-        return coords
     try:
-        return await geocoder.geocode(value)
+        return await resolve_place(value, geocoder)
     except GeocodeNotFound as exc:
         raise HTTPException(
             status_code=400, detail=f"could not find a place named {value!r}"

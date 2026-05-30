@@ -15,6 +15,8 @@ from alembic import context
 from app.core.config import get_settings
 from app.db.base import Base
 from app.models import stop as _stop  # noqa: F401 — register the Stop table on the metadata
+from app.models import trip_alert as _trip_alert  # noqa: F401 — register trip_alerts
+from app.models import user as _user  # noqa: F401 — register the User table on the metadata
 
 config = context.config
 # Use a URL the caller already set (e.g. tests pointing at a throwaway DB); otherwise fall
