@@ -29,6 +29,4 @@ class User(Base):
     hashed_password: Mapped[str]
     # Set by Postgres (now()), not the app, so the value is server-authoritative and the
     # column stays NOT NULL without the ORM having to supply it.
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

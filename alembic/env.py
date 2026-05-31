@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from alembic import context
 from app.core.config import get_settings
 from app.db.base import Base
+from app.models import notification as _notification  # noqa: F401 — register notifications
 from app.models import stop as _stop  # noqa: F401 — register the Stop table on the metadata
 from app.models import trip_alert as _trip_alert  # noqa: F401 — register trip_alerts
 from app.models import user as _user  # noqa: F401 — register the User table on the metadata
@@ -27,7 +28,13 @@ config.set_main_option(
 )
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers=False is deliberate: the default (True) would silently
+    # disable every logger already created at import time — including the app's own
+    # `app.*` loggers — whenever env.py runs in-process (e.g. command.upgrade() from the
+    # integration test harness). That left those loggers dead for the rest of the test
+    # session and broke caplog-based assertions. We only want to *add* Alembic's logging
+    # config, not tear down everyone else's.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 

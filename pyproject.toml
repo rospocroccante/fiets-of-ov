@@ -13,6 +13,7 @@ dependencies = [
     "sqlalchemy[asyncio]>=2.0",
     "asyncpg>=0.29",
     "alembic>=1.13",
+    "arq>=0.26",
     "pyjwt>=2.9",
     "bcrypt>=4.2",
     "python-multipart>=0.0.12",
@@ -56,6 +57,9 @@ extend-immutable-calls = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# Put the project root on sys.path so `import app` works under the `pytest` console script
+# (not just `python -m pytest`), independent of the editable install's state.
+pythonpath = ["."]
 filterwarnings = [
     "error",
     # Starlette's TestClient warns about httpx on newer interpreters (e.g. local 3.14);

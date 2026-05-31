@@ -16,8 +16,10 @@ POST a `plan` query and read `data.plan.itineraries`. Things to know:
   `transportModes` list, so callers don't need to know the GraphQL shape.
 """
 
+from datetime import datetime
+
 import httpx
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.core.config import get_settings
 
@@ -25,9 +27,25 @@ from app.core.config import get_settings
 _GRAPHQL_PATH = "/otp/gtfs/v1"
 
 # `startTime`/`endTime` are epoch-ms Longs in the GTFS API; `route` is null off-transit.
+# `$date`/`$time` are optional plan-from-when strings (local to the OTP graph's tz); when
+# both are null OTP plans from "now", so existing "plan now" callers are unaffected.
 _PLAN_QUERY = """
-query Plan($from: InputCoordinates!, $to: InputCoordinates!, $modes: [TransportMode!], $num: Int) {
-  plan(from: $from, to: $to, transportModes: $modes, numItineraries: $num) {
+query Plan(
+  $from: InputCoordinates!
+  $to: InputCoordinates!
+  $modes: [TransportMode!]
+  $num: Int
+  $date: String
+  $time: String
+) {
+  plan(
+    from: $from
+    to: $to
+    transportModes: $modes
+    numItineraries: $num
+    date: $date
+    time: $time
+  ) {
     itineraries {
       duration
       startTime
@@ -128,18 +146,27 @@ class OTPClient:
         from_place: tuple[float, float],
         to_place: tuple[float, float],
         mode: str,
+        departure: datetime | None = None,
     ) -> Plan:
         """Return OTP's itineraries for `from_place` -> `to_place` using `mode`.
 
         `from_place`/`to_place` are `(lat, lon)`; `mode` is a comma-separated mode string
-        (e.g. "BICYCLE", "TRANSIT,WALK"). Raises `OTPError` on any failure so the caller
-        never receives a fabricated route.
+        (e.g. "BICYCLE", "TRANSIT,WALK").
+
+        `departure` pins the plan to a specific moment (e.g. a scheduled rain-alert trip):
+        it is split into OTP's separate `date`/`time` strings. When omitted, both are sent
+        as null so OTP plans from "now" — keeping existing "plan now" callers unchanged.
+
+        Raises `OTPError` on any failure so the caller never receives a fabricated route.
         """
         variables = {
             "from": {"lat": from_place[0], "lon": from_place[1]},
             "to": {"lat": to_place[0], "lon": to_place[1]},
             "modes": _to_transport_modes(mode),
             "num": 3,
+            # OTP expects date/time as separate strings; null on both => plan from "now".
+            "date": departure.strftime("%Y-%m-%d") if departure is not None else None,
+            "time": departure.strftime("%H:%M:%S") if departure is not None else None,
         }
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
@@ -158,13 +185,20 @@ class OTPClient:
         if plan is None:
             raise OTPError("OTP returned no plan")
 
-        itineraries = [
-            Itinerary(
-                duration=it["duration"],
-                start_time=it["startTime"],
-                end_time=it["endTime"],
-                legs=[_leg_from_graphql(leg) for leg in it["legs"]],
-            )
-            for it in plan.get("itineraries", [])
-        ]
+        # OTP is untrusted: a 200 whose body doesn't match the expected shape is just another
+        # failure mode. Wrap parsing so a missing field / bad type surfaces as OTPError rather
+        # than leaking a KeyError/ValidationError to callers (e.g. the notify sweep, which only
+        # guards against OTPError).
+        try:
+            itineraries = [
+                Itinerary(
+                    duration=it["duration"],
+                    start_time=it["startTime"],
+                    end_time=it["endTime"],
+                    legs=[_leg_from_graphql(leg) for leg in it["legs"]],
+                )
+                for it in plan.get("itineraries", [])
+            ]
+        except (KeyError, TypeError, ValidationError) as exc:
+            raise OTPError(f"OTP returned a malformed itinerary: {exc}") from exc
         return Plan(itineraries=itineraries)

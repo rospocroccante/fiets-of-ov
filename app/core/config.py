@@ -55,6 +55,16 @@ class Settings(BaseSettings):
     # there is no refresh-token flow in the MVP, so this is the full session length.
     access_token_expire_minutes: int = 60
 
+    # Background rain notifications (Phase 6). The ARQ worker wakes on a cron schedule and
+    # alerts a trip's owner when rain is expected on the bike leg around departure.
+    # How far ahead of a trip's departure_time we look when deciding to notify — the alert
+    # should arrive with enough lead to act on (grab the tram instead of the bike), but not
+    # so early that the short-term rain forecast is unreliable. 15 min balances the two.
+    notify_lead_minutes: int = 15
+    # Cron cadence for the worker's due-check sweep, in seconds (300 = every 5 min). Matches
+    # Buienradar's ~5-min update cadence, so we never re-evaluate against unchanged data.
+    notify_scheduler_seconds: int = 300
+
     log_level: str = "INFO"
 
 

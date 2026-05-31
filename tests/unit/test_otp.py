@@ -7,6 +7,8 @@ respx so these run offline.
 """
 
 import json
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
@@ -115,6 +117,36 @@ async def test_plan_sends_graphql_coordinates_and_modes():
 
 
 @respx.mock
+async def test_plan_sends_departure_date_and_time():
+    # A scheduled trip-alert evaluation plans the bike leg *at the departure time*, not
+    # "now". OTP's plan() takes date/time strings (local to the OTP graph's timezone), so
+    # the client must split the departure datetime into "YYYY-MM-DD" and "HH:MM:SS".
+    route = respx.post(GQL_URL).mock(return_value=httpx.Response(200, json=BIKE))
+
+    departure = datetime(2026, 5, 31, 8, 7, 5, tzinfo=ZoneInfo("Europe/Amsterdam"))
+    await OTPClient(base_url=URL).plan(
+        from_place=FROM, to_place=TO, mode="BICYCLE", departure=departure
+    )
+
+    variables = json.loads(route.calls.last.request.content)["variables"]
+    assert variables["date"] == "2026-05-31"
+    assert variables["time"] == "08:07:05"
+
+
+@respx.mock
+async def test_plan_sends_null_date_and_time_when_no_departure():
+    # Without a departure, OTP must plan from "now": send null for both so the existing
+    # callers (and OTP's default) are unchanged.
+    route = respx.post(GQL_URL).mock(return_value=httpx.Response(200, json=BIKE))
+
+    await OTPClient(base_url=URL).plan(from_place=FROM, to_place=TO, mode="BICYCLE")
+
+    variables = json.loads(route.calls.last.request.content)["variables"]
+    assert variables["date"] is None
+    assert variables["time"] is None
+
+
+@respx.mock
 async def test_raises_on_http_error_status():
     respx.post(GQL_URL).mock(return_value=httpx.Response(503))
 
@@ -159,3 +191,15 @@ def test_first_transit_itinerary_none_when_only_walking():
 
 def test_first_transit_itinerary_none_when_empty():
     assert first_transit_itinerary(Plan(itineraries=[])) is None
+
+
+@respx.mock
+async def test_raises_on_malformed_itinerary():
+    # A 200 response whose body doesn't match the expected shape (here an itinerary missing
+    # "duration") must raise OTPError, not leak a KeyError/ValidationError to the caller —
+    # OTP is untrusted, so a malformed-but-200 response is just another failure mode.
+    bad = gql([{"startTime": 1, "endTime": 2, "legs": []}])  # no "duration"
+    respx.post(GQL_URL).mock(return_value=httpx.Response(200, json=bad))
+
+    with pytest.raises(OTPError):
+        await OTPClient(base_url=URL).plan(from_place=FROM, to_place=TO, mode="BICYCLE")
