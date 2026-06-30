@@ -45,7 +45,7 @@ async def gather_candidates(
     plans = [r for r in results if not isinstance(r, BaseException)]
     if not plans:
         first_error = next((r for r in results if isinstance(r, BaseException)), None)
-        raise OTPError(f"all OTP queries failed: {first_error}")
+        raise OTPError(f"all OTP queries failed: {first_error}") from first_error
 
     best: dict[OptionKind, Itinerary] = {}
     for plan in plans:
