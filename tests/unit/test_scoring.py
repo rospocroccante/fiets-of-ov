@@ -7,6 +7,7 @@ from app.services.scoring import (
     Candidate,
     classify_kind,
     rank,
+    score,
 )
 
 TZ = ZoneInfo("Europe/Amsterdam")
@@ -87,3 +88,10 @@ def test_partial_rain_favours_bike_and_ride_over_pure_bike():
     wet = rain_at(*range(10, 60, 5))  # wet from 14:10 on
     ordered = rank([Candidate("bike", BIKE), Candidate("bike_and_ride", BIKE_RIDE)], rain=wet)
     assert ordered[0].kind == "bike_and_ride"
+
+
+def test_score_arithmetic_is_pinned():
+    # TRANSIT: 14 min total, one boarding (0 transfers), no rain -> cost == minutes.
+    s = score(Candidate("transit", TRANSIT), rain=None)
+    assert s.cost == 14.0
+    assert s.rain_minutes == 0
