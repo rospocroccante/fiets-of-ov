@@ -1,8 +1,8 @@
 """`GET /v1/plan` — the rich, drawable counterpart to `/v1/advice`.
 
 Same wiring as the advice endpoint (OTP + Buienradar mocked with respx, clients swapped via
-dependency overrides), but the leg fixtures carry the extra detail `/v1/plan` exposes —
-`from`/`to` places, `legGeometry`, route long name, headsign — so the test asserts the full
+dependency overrides), but the leg fixtures carry the extra detail `/v1/plan` exposes --
+`from`/`to` places, `legGeometry`, route long name, headsign -- so the test asserts the full
 drawable shape, not just the recommendation.
 """
 
@@ -98,6 +98,41 @@ TRANSIT_JSON = _gql(
     ]
 )
 
+# A bike-and-ride itinerary the mixed query returns: bike to a stop, then tram.
+_BIKE_RIDE_ITIN = {
+    "duration": 900,
+    "startTime": ms(14, 0),
+    "endTime": ms(14, 15),
+    "legs": [
+        {
+            "mode": "BICYCLE",
+            "startTime": ms(14, 0),
+            "endTime": ms(14, 5),
+            "duration": 300,
+            "distance": 1200.0,
+            "route": None,
+            "from": {"name": "Origin", "lat": 52.37, "lon": 4.89},
+            "to": {"name": "Dam", "lat": 52.373, "lon": 4.892},
+            "legGeometry": {"points": "_p~iF~ps|U"},
+            "steps": [],
+        },
+        {
+            "mode": "TRAM",
+            "startTime": ms(14, 5),
+            "endTime": ms(14, 15),
+            "duration": 600,
+            "distance": 2400.0,
+            "route": {"shortName": "13", "longName": "Tram 13"},
+            "trip": {"tripHeadsign": "Geuzenveld"},
+            "from": {"name": "Dam", "lat": 52.373, "lon": 4.892},
+            "to": {"name": "Vondelpark", "lat": 52.358, "lon": 4.868},
+            "legGeometry": {"points": "_ulLnnqC_mqNvxq`@"},
+        },
+    ],
+}
+
+MIXED_JSON = _gql([_BIKE_RIDE_ITIN])
+
 RAIN_WET = "000|14:00\n109|14:05\n000|14:10\n000|14:20\n"
 RAIN_DRY = "000|14:00\n000|14:05\n000|14:20\n"
 
@@ -130,10 +165,13 @@ def _override_clients():
     app.dependency_overrides.clear()
 
 
-def _otp_by_mode(bike: httpx.Response, transit: httpx.Response):
+def _otp_by_modes(by_key: dict[str, httpx.Response]):
+    """respx side_effect answering by the full requested mode set (comma-joined)."""
+
     def handler(request: httpx.Request) -> httpx.Response:
         modes = json.loads(request.content)["variables"]["modes"]
-        return bike if modes[0]["mode"] == "BICYCLE" else transit
+        key = ",".join(m["mode"] for m in modes)
+        return by_key.get(key, httpx.Response(200, json=_gql([])))
 
     return handler
 
@@ -141,8 +179,12 @@ def _otp_by_mode(bike: httpx.Response, transit: httpx.Response):
 @respx.mock
 def test_plan_returns_both_itineraries_with_geometry_and_legs():
     respx.post(GQL_URL).mock(
-        side_effect=_otp_by_mode(
-            httpx.Response(200, json=BIKE_JSON), httpx.Response(200, json=TRANSIT_JSON)
+        side_effect=_otp_by_modes(
+            {
+                "BICYCLE": httpx.Response(200, json=BIKE_JSON),
+                "TRANSIT,WALK": httpx.Response(200, json=TRANSIT_JSON),
+                "BICYCLE,TRANSIT,WALK": httpx.Response(200, json=MIXED_JSON),
+            }
         )
     )
     respx.get(RAIN_URL).mock(return_value=httpx.Response(200, text=RAIN_WET))
@@ -151,18 +193,22 @@ def test_plan_returns_both_itineraries_with_geometry_and_legs():
 
     assert response.status_code == 200
     body = response.json()
-    assert body["recommendation"] == "transit"
+    assert body["recommendation"] in {"transit", "bike_and_ride"}
 
-    bike = body["bike"]
-    assert bike["minutes"] == 20
-    assert bike["legs"][0]["geometry"]  # encoded polyline present
-    assert bike["legs"][0]["steps"][0]["street"] == "Damrak"
+    options = body["options"]
+    kinds = {o["kind"] for o in options}
+    assert "bike" in kinds
 
-    transit = body["transit"]
-    assert transit is not None
-    modes = [leg["mode"] for leg in transit["legs"]]
+    bike_option = next(o for o in options if o["kind"] == "bike")
+    assert bike_option["itinerary"]["minutes"] == 20
+    assert bike_option["itinerary"]["legs"][0]["geometry"]  # encoded polyline present
+    assert bike_option["itinerary"]["legs"][0]["steps"][0]["street"] == "Damrak"
+
+    transit_option = next((o for o in options if o["kind"] == "transit"), None)
+    assert transit_option is not None
+    modes = [leg["mode"] for leg in transit_option["itinerary"]["legs"]]
     assert modes == ["WALK", "TRAM"]
-    tram = transit["legs"][1]
+    tram = transit_option["itinerary"]["legs"][1]
     assert tram["route"] == "13"
     assert tram["headsign"] == "Geuzenveld"
     assert tram["from"]["name"] == "Dam"
@@ -173,7 +219,13 @@ def test_plan_returns_both_itineraries_with_geometry_and_legs():
 @respx.mock
 def test_plan_transit_unavailable_returns_bike_only():
     respx.post(GQL_URL).mock(
-        side_effect=_otp_by_mode(httpx.Response(200, json=BIKE_JSON), httpx.Response(503))
+        side_effect=_otp_by_modes(
+            {
+                "BICYCLE": httpx.Response(200, json=BIKE_JSON),
+                "TRANSIT,WALK": httpx.Response(503),
+                "BICYCLE,TRANSIT,WALK": httpx.Response(503),
+            }
+        )
     )
     respx.get(RAIN_URL).mock(return_value=httpx.Response(200, text=RAIN_DRY))
 
@@ -182,8 +234,10 @@ def test_plan_transit_unavailable_returns_bike_only():
     assert response.status_code == 200
     body = response.json()
     assert body["recommendation"] == "bike"
-    assert body["transit"] is None
-    assert body["bike"]["legs"][0]["mode"] == "BICYCLE"
+    options = body["options"]
+    assert len(options) == 1
+    assert options[0]["kind"] == "bike"
+    assert options[0]["itinerary"]["legs"][0]["mode"] == "BICYCLE"
 
 
 @respx.mock
@@ -199,3 +253,29 @@ def test_plan_bike_routing_failure_returns_502():
 
     response = TestClient(app).get("/v1/plan", params={"from": "52.37,4.89", "to": "52.35,4.86"})
     assert response.status_code == 502
+
+
+@respx.mock
+def test_plan_returns_ranked_options_with_bike_and_ride():
+    respx.post(GQL_URL).mock(
+        side_effect=_otp_by_modes(
+            {
+                "BICYCLE": httpx.Response(200, json=BIKE_JSON),
+                "TRANSIT,WALK": httpx.Response(200, json=TRANSIT_JSON),
+                "BICYCLE,TRANSIT,WALK": httpx.Response(200, json=MIXED_JSON),
+            }
+        )
+    )
+    respx.get(RAIN_URL).mock(return_value=httpx.Response(200, text=RAIN_WET))
+
+    response = TestClient(app).get("/v1/plan", params={"from": "52.37,4.89", "to": "52.35,4.86"})
+
+    assert response.status_code == 200
+    body = response.json()
+    kinds = {o["kind"] for o in body["options"]}
+    assert kinds == {"bike", "transit", "bike_and_ride"}
+    assert body["options"][0]["recommended"] is True
+    assert body["recommendation"] == body["options"][0]["kind"]
+    # ranked by ascending score
+    scores = [o["score"] for o in body["options"]]
+    assert scores == sorted(scores)

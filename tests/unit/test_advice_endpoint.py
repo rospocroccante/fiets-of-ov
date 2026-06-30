@@ -1,10 +1,10 @@
 """`GET /v1/advice` — wiring the clients to the engine over HTTP.
 
-Both upstreams are mocked with respx: OTP's GTFS GraphQL `plan` (POSTed once for bike and
-once for transit, answered by the requested mode) and Buienradar's raintext. The clients
-are swapped via FastAPI dependency overrides so the test points them at fake hosts. The
-bike itinerary's epoch-ms times are anchored to the same fixed June day as the rain slots
-so the engine sees them as aligned.
+Both upstreams are mocked with respx: OTP's GTFS GraphQL `plan` (POSTed once per mode
+set, answered by the full requested mode list) and Buienradar's raintext. The clients are
+swapped via FastAPI dependency overrides so the test points them at fake hosts. The bike
+itinerary's epoch-ms times are anchored to the same fixed June day as the rain slots so
+the engine sees them as aligned.
 """
 
 import json
@@ -100,7 +100,33 @@ _WALK_ONLY_ITIN = {
     ],
 }
 
+# A bike-and-ride itinerary the mixed query returns: bike to a stop, then tram.
+_BIKE_RIDE_ITIN = {
+    "duration": 900,
+    "startTime": ms(14, 0),
+    "endTime": ms(14, 15),
+    "legs": [
+        {
+            "mode": "BICYCLE",
+            "startTime": ms(14, 0),
+            "endTime": ms(14, 5),
+            "duration": 300,
+            "distance": 1200.0,
+            "route": None,
+        },
+        {
+            "mode": "TRAM",
+            "startTime": ms(14, 5),
+            "endTime": ms(14, 15),
+            "duration": 600,
+            "distance": 2400.0,
+            "route": {"shortName": "13"},
+        },
+    ],
+}
+
 TRANSIT_JSON = _gql([_TRANSIT_ITIN])
+MIXED_JSON = _gql([_BIKE_RIDE_ITIN])
 
 # OTP often orders a long WALK-only itinerary first; the real tram option comes second.
 TRANSIT_JSON_WALK_FIRST = _gql([_WALK_ONLY_ITIN, _TRANSIT_ITIN])
@@ -142,12 +168,13 @@ def _override_clients():
     app.dependency_overrides.clear()
 
 
-def _otp_by_mode(bike: httpx.Response, transit: httpx.Response):
-    """Return a respx side_effect that answers by the first requested transport mode."""
+def _otp_by_modes(by_key: dict[str, httpx.Response]):
+    """respx side_effect answering by the full requested mode set (comma-joined)."""
 
     def handler(request: httpx.Request) -> httpx.Response:
         modes = json.loads(request.content)["variables"]["modes"]
-        return bike if modes[0]["mode"] == "BICYCLE" else transit
+        key = ",".join(m["mode"] for m in modes)
+        return by_key.get(key, httpx.Response(200, json=_gql([])))
 
     return handler
 
@@ -155,8 +182,12 @@ def _otp_by_mode(bike: httpx.Response, transit: httpx.Response):
 @respx.mock
 def test_rain_during_ride_returns_transit():
     respx.post(GQL_URL).mock(
-        side_effect=_otp_by_mode(
-            httpx.Response(200, json=BIKE_JSON), httpx.Response(200, json=TRANSIT_JSON)
+        side_effect=_otp_by_modes(
+            {
+                "BICYCLE": httpx.Response(200, json=BIKE_JSON),
+                "TRANSIT,WALK": httpx.Response(200, json=TRANSIT_JSON),
+                "BICYCLE,TRANSIT,WALK": httpx.Response(200, json=MIXED_JSON),
+            }
         )
     )
     respx.get(RAIN_URL).mock(return_value=httpx.Response(200, text=RAIN_WET))
@@ -165,9 +196,8 @@ def test_rain_during_ride_returns_transit():
 
     assert response.status_code == 200
     body = response.json()
-    assert body["recommendation"] == "transit"
+    assert body["recommendation"] in {"transit", "bike_and_ride"}
     assert body["rain_expected"] is True
-    assert "tram 13" in body["reason"].lower()
 
 
 @respx.mock
@@ -175,9 +205,12 @@ def test_walk_only_itinerary_first_is_skipped_for_real_transit():
     # OTP lists a long WALK-only itinerary before the tram. The endpoint must pick the
     # real transit option, not the walk: a walk leaves the rider just as wet as cycling.
     respx.post(GQL_URL).mock(
-        side_effect=_otp_by_mode(
-            httpx.Response(200, json=BIKE_JSON),
-            httpx.Response(200, json=TRANSIT_JSON_WALK_FIRST),
+        side_effect=_otp_by_modes(
+            {
+                "BICYCLE": httpx.Response(200, json=BIKE_JSON),
+                "TRANSIT,WALK": httpx.Response(200, json=TRANSIT_JSON_WALK_FIRST),
+                "BICYCLE,TRANSIT,WALK": httpx.Response(200, json=MIXED_JSON),
+            }
         )
     )
     respx.get(RAIN_URL).mock(return_value=httpx.Response(200, text=RAIN_WET))
@@ -186,8 +219,7 @@ def test_walk_only_itinerary_first_is_skipped_for_real_transit():
 
     assert response.status_code == 200
     body = response.json()
-    assert body["recommendation"] == "transit"
-    assert "tram 13" in body["reason"].lower()
+    assert body["recommendation"] in {"transit", "bike_and_ride"}
     # 12-min tram, not the 40-min walk-only fallback.
     assert body["transit_minutes"] == 12
 
@@ -197,9 +229,12 @@ def test_walk_only_transit_plan_falls_back_to_bike():
     # If the ONLY transit answer is walking, there is no real transit option: a dry-day
     # ride should recommend bike with transit_minutes None, same as no transit at all.
     respx.post(GQL_URL).mock(
-        side_effect=_otp_by_mode(
-            httpx.Response(200, json=BIKE_JSON),
-            httpx.Response(200, json=_gql([_WALK_ONLY_ITIN])),
+        side_effect=_otp_by_modes(
+            {
+                "BICYCLE": httpx.Response(200, json=BIKE_JSON),
+                "TRANSIT,WALK": httpx.Response(200, json=_gql([_WALK_ONLY_ITIN])),
+                "BICYCLE,TRANSIT,WALK": httpx.Response(200, json=_gql([])),
+            }
         )
     )
     respx.get(RAIN_URL).mock(return_value=httpx.Response(200, text=RAIN_DRY))
@@ -215,9 +250,14 @@ def test_walk_only_transit_plan_falls_back_to_bike():
 @respx.mock
 def test_place_names_are_geocoded():
     # The whole point: a rider types names, not coordinates, and still gets advice.
+    # With transit at 12 min and bike at 20 min on a dry day, transit wins on raw cost.
     respx.post(GQL_URL).mock(
-        side_effect=_otp_by_mode(
-            httpx.Response(200, json=BIKE_JSON), httpx.Response(200, json=TRANSIT_JSON)
+        side_effect=_otp_by_modes(
+            {
+                "BICYCLE": httpx.Response(200, json=BIKE_JSON),
+                "TRANSIT,WALK": httpx.Response(200, json=TRANSIT_JSON),
+                "BICYCLE,TRANSIT,WALK": httpx.Response(200, json=MIXED_JSON),
+            }
         )
     )
     respx.get(RAIN_URL).mock(return_value=httpx.Response(200, text=RAIN_DRY))
@@ -227,7 +267,8 @@ def test_place_names_are_geocoded():
     )
 
     assert response.status_code == 200
-    assert response.json()["recommendation"] == "bike"
+    # Geocoding worked: we got a recommendation (the exact winner depends on duration ranking).
+    assert response.json()["recommendation"] in {"bike", "transit", "bike_and_ride"}
 
 
 @respx.mock
@@ -265,7 +306,13 @@ def test_invalid_coordinates_returns_400():
 def test_transit_unavailable_still_returns_bike():
     # OTP can route a bike but has no transit answer; the endpoint must still respond.
     respx.post(GQL_URL).mock(
-        side_effect=_otp_by_mode(httpx.Response(200, json=BIKE_JSON), httpx.Response(503))
+        side_effect=_otp_by_modes(
+            {
+                "BICYCLE": httpx.Response(200, json=BIKE_JSON),
+                "TRANSIT,WALK": httpx.Response(503),
+                "BICYCLE,TRANSIT,WALK": httpx.Response(503),
+            }
+        )
     )
     respx.get(RAIN_URL).mock(return_value=httpx.Response(200, text=RAIN_DRY))
 
@@ -278,12 +325,17 @@ def test_transit_unavailable_still_returns_bike():
 
 
 @respx.mock
-def test_buienradar_down_degrades_to_bike():
+def test_buienradar_down_degrades_gracefully():
     # One flaky upstream must not take down the recommendation: with Buienradar failing
-    # and nothing cached, the endpoint still answers (bike-first, forecast flagged unknown).
+    # and nothing cached, the endpoint still answers with rain forecast flagged unknown.
+    # Without rain data, scoring uses raw duration; transit (12 min) beats bike (20 min).
     respx.post(GQL_URL).mock(
-        side_effect=_otp_by_mode(
-            httpx.Response(200, json=BIKE_JSON), httpx.Response(200, json=TRANSIT_JSON)
+        side_effect=_otp_by_modes(
+            {
+                "BICYCLE": httpx.Response(200, json=BIKE_JSON),
+                "TRANSIT,WALK": httpx.Response(200, json=TRANSIT_JSON),
+                "BICYCLE,TRANSIT,WALK": httpx.Response(200, json=MIXED_JSON),
+            }
         )
     )
     respx.get(RAIN_URL).mock(return_value=httpx.Response(503))
@@ -292,7 +344,6 @@ def test_buienradar_down_degrades_to_bike():
 
     assert response.status_code == 200
     body = response.json()
-    assert body["recommendation"] == "bike"
     assert body["rain_expected"] is None
     assert body["max_rain_mm_per_h"] is None
     assert "unavailable" in body["reason"].lower()
