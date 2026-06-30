@@ -46,7 +46,8 @@ Two complaints about the current routing:
 | Question | Decision |
 | --- | --- |
 | What does "mix" produce? | **Bike-and-ride now, OV-fiets later.** Add `BICYCLE,TRANSIT,WALK` candidates against the current graph; design for OV-fiets later. |
-| What does "best" optimize? | **Rain-aware generalized cost**: door-to-door time + per-minute rain-exposure penalty on cycling/walking legs + small transfer penalty. |
+| What does "best" optimize? | **Rain-aware generalized cost**: door-to-door time + per-minute rain-exposure penalty on cycling/walking legs + small transfer penalty + a **bike preference** (a flat handicap on non-bike options). |
+| Dry-day default (resolved during build) | **Bike-first unless transit saves a lot.** A flat `transit_bias_min` (~10 min) is added to every non-bike option's cost, so on a dry day bike wins unless a transit/bike-and-ride option is faster by more than that threshold. Preserves the app's bike-first identity; rain still flips the choice by penalizing exposed cycling. |
 | How to present results? | **Ranked list of options**, one flagged recommended. Frontend shows all (2-3), recommended highlighted + expanded, others compact. |
 
 ## Approach (chosen: A)
@@ -111,7 +112,15 @@ cost = total_minutes
      + sum over exposed legs (BICYCLE | WALK):
            exposed_minutes(leg) * lambda(peak_mm_h within leg's window)
      + transfer_count * tau
+     + (transit_bias_min if kind != "bike" else 0)
 ```
+
+**Bike preference (`transit_bias_min`, default 10.0).** A flat handicap added to every
+non-bike option (transit and bike-and-ride). Because it is a flat addition, a non-bike
+option only beats pure bike when its base cost is lower by more than `transit_bias_min` —
+i.e. "bike-first unless transit saves more than ~10 minutes." On a dry day this keeps the
+recommendation on the bike for close calls; rain still flips it because the bike's
+rain-exposure cost grows past the gap.
 
 - **Exposed legs**: `BICYCLE` and `WALK`. Transit (TRAM/BUS/METRO/RAIL/FERRY) is sheltered
   -> no rain penalty.
