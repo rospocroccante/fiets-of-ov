@@ -198,6 +198,8 @@ def test_rain_during_ride_returns_transit():
     body = response.json()
     assert body["recommendation"] in {"transit", "bike_and_ride"}
     assert body["rain_expected"] is True
+    # Whether the winner is transit or bike-and-ride, it boards tram 13.
+    assert "tram 13" in body["reason"].lower()
 
 
 @respx.mock
@@ -222,6 +224,7 @@ def test_walk_only_itinerary_first_is_skipped_for_real_transit():
     assert body["recommendation"] in {"transit", "bike_and_ride"}
     # 12-min tram, not the 40-min walk-only fallback.
     assert body["transit_minutes"] == 12
+    assert "tram 13" in body["reason"].lower()
 
 
 @respx.mock
@@ -267,8 +270,8 @@ def test_place_names_are_geocoded():
     )
 
     assert response.status_code == 200
-    # Geocoding worked: we got a recommendation (the exact winner depends on duration ranking).
-    assert response.json()["recommendation"] in {"bike", "transit", "bike_and_ride"}
+    # Dry day: ranking is by time, transit (12 min) is fastest -> transit.
+    assert response.json()["recommendation"] == "transit"
 
 
 @respx.mock
