@@ -107,7 +107,7 @@ def _reason(
             return f"dry during your {minutes}-min ride -> bike"
         return f"dry -> fastest is {top.kind.replace('_', ' ')} ({minutes} min)"
     # Rain is expected on the bike window.
-    when = f"~{peak:g} mm/h" if peak else "rain"
+    when = f"~{peak:g} mm/h" if peak is not None else "rain"
     if top.kind == "transit":
         line = _boarding_line(top.itinerary) or "public transport"
         return f"rain ({when}) -> take {line} ({minutes} min)"
