@@ -56,7 +56,12 @@ query Plan(
         endTime
         duration
         distance
-        route { shortName }
+        route { shortName longName }
+        trip { tripHeadsign }
+        from { name lat lon }
+        to { name lat lon }
+        legGeometry { points }
+        steps { distance relativeDirection streetName }
       }
     }
   }
@@ -66,6 +71,16 @@ query Plan(
 
 class OTPError(Exception):
     """Raised when OTP cannot be reached or did not return a usable itinerary."""
+
+
+class LegStep(BaseModel):
+    """One turn-by-turn instruction within a street (walk/bike) leg."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    distance: float | None = None
+    relative_direction: str | None = Field(default=None, alias="relativeDirection")
+    street_name: str | None = Field(default=None, alias="streetName")
 
 
 class Leg(BaseModel):
@@ -80,6 +95,19 @@ class Leg(BaseModel):
     distance: float | None = None
     # Present only for transit legs (e.g. "13" for tram 13); None for bike/walk.
     route_short_name: str | None = Field(default=None, alias="routeShortName")
+    # Optional display detail (used by /v1/plan; the advice engine ignores these).
+    route_long_name: str | None = None
+    headsign: str | None = None
+    from_name: str | None = None
+    from_lat: float | None = None
+    from_lon: float | None = None
+    to_name: str | None = None
+    to_lat: float | None = None
+    to_lon: float | None = None
+    # Encoded polyline (Google polyline, precision 5) for drawing the leg on a map.
+    geometry: str | None = None
+    # Turn-by-turn steps for street legs (walk/bike); empty for transit.
+    steps: list[LegStep] = Field(default_factory=list)
 
 
 class Itinerary(BaseModel):
@@ -119,8 +147,20 @@ def _to_transport_modes(mode: str) -> list[dict[str, str]]:
 
 
 def _leg_from_graphql(raw: dict) -> Leg:
-    """Build a Leg from a GraphQL leg node, flattening `route.shortName`."""
+    """Build a Leg from a GraphQL leg node, flattening nested route/trip/place/geometry."""
     route = raw.get("route") or {}
+    trip = raw.get("trip") or {}
+    origin = raw.get("from") or {}
+    dest = raw.get("to") or {}
+    geometry = raw.get("legGeometry") or {}
+    steps = [
+        LegStep(
+            distance=s.get("distance"),
+            relative_direction=s.get("relativeDirection"),
+            street_name=s.get("streetName"),
+        )
+        for s in (raw.get("steps") or [])
+    ]
     return Leg(
         mode=raw["mode"],
         start_time=raw["startTime"],
@@ -128,6 +168,16 @@ def _leg_from_graphql(raw: dict) -> Leg:
         duration=raw["duration"],
         distance=raw.get("distance"),
         route_short_name=route.get("shortName"),
+        route_long_name=route.get("longName"),
+        headsign=trip.get("tripHeadsign"),
+        from_name=origin.get("name"),
+        from_lat=origin.get("lat"),
+        from_lon=origin.get("lon"),
+        to_name=dest.get("name"),
+        to_lat=dest.get("lat"),
+        to_lon=dest.get("lon"),
+        geometry=geometry.get("points"),
+        steps=steps,
     )
 
 
