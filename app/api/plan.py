@@ -11,10 +11,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.deps import get_geocoder_client, get_otp_client, get_rain_service
 from app.clients.geocoder import GeocodeNotFound, GeocoderClient
-from app.clients.otp import Itinerary, Leg, OTPClient, OTPError, first_transit_itinerary
-from app.schemas.plan import ItineraryOut, LegOut, PlaceOut, PlanResponse, StepOut
-from app.services.advice import decide
+from app.clients.otp import Itinerary, Leg, OTPClient, OTPError
+from app.schemas.plan import ItineraryOut, LegOut, OptionOut, PlaceOut, PlanResponse, StepOut
+from app.services.advice import recommend
 from app.services.places import resolve_place
+from app.services.planner import gather_candidates
 from app.services.rain import RainService
 
 router = APIRouter()
@@ -78,35 +79,35 @@ async def get_plan(
     rain_service: RainService = Depends(get_rain_service),
     geocoder: GeocoderClient = Depends(get_geocoder_client),
 ) -> PlanResponse:
-    """Return the bike-vs-OV recommendation plus both drawable itineraries for `from` -> `to`."""
+    """Return the rain-aware recommendation plus all ranked, drawable options."""
     from_place = await _resolve_place(origin, geocoder)
     to_place = await _resolve_place(destination, geocoder)
 
     try:
-        bike_plan = await otp.plan(from_place=from_place, to_place=to_place, mode="BICYCLE")
+        candidates = await gather_candidates(otp, from_place, to_place)
     except OTPError as exc:
         raise HTTPException(status_code=502, detail="routing upstream unavailable") from exc
-    if not bike_plan.itineraries:
-        raise HTTPException(status_code=502, detail="no bike route found for this trip")
-    bike = bike_plan.itineraries[0]
-
-    transit: Itinerary | None = None
-    try:
-        transit_plan = await otp.plan(from_place=from_place, to_place=to_place, mode="TRANSIT,WALK")
-        transit = first_transit_itinerary(transit_plan)
-    except OTPError:
-        transit = None
+    if not candidates:
+        raise HTTPException(status_code=502, detail="no route found for this trip")
 
     rain = await rain_service.get_forecast(lat=from_place[0], lon=from_place[1])
-    advice = decide(bike=bike, transit=transit, rain=rain)
+    plan = recommend(candidates, rain)
 
     return PlanResponse(
-        recommendation=advice.recommendation,
-        reason=advice.reason,
-        max_rain_mm_per_h=advice.max_rain_mm_per_h,
-        rain_expected=advice.rain_expected,
+        recommendation=plan.recommendation,
+        reason=plan.reason,
+        max_rain_mm_per_h=plan.max_rain_mm_per_h,
+        rain_expected=plan.rain_expected,
         origin=PlaceOut(lat=from_place[0], lon=from_place[1]),
         destination=PlaceOut(lat=to_place[0], lon=to_place[1]),
-        bike=_itinerary_out(bike),
-        transit=_itinerary_out(transit) if transit is not None else None,
+        options=[
+            OptionOut(
+                kind=opt.kind,
+                recommended=(i == 0),
+                score=opt.cost,
+                rain_minutes=opt.rain_minutes,
+                itinerary=_itinerary_out(opt.itinerary),
+            )
+            for i, opt in enumerate(plan.options)
+        ],
     )
