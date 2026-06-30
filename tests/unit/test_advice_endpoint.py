@@ -196,9 +196,8 @@ def test_rain_during_ride_returns_transit():
 
     assert response.status_code == 200
     body = response.json()
-    assert body["recommendation"] in {"transit", "bike_and_ride"}
+    assert body["recommendation"] == "transit"
     assert body["rain_expected"] is True
-    # Whether the winner is transit or bike-and-ride, it boards tram 13.
     assert "tram 13" in body["reason"].lower()
 
 
@@ -221,7 +220,7 @@ def test_walk_only_itinerary_first_is_skipped_for_real_transit():
 
     assert response.status_code == 200
     body = response.json()
-    assert body["recommendation"] in {"transit", "bike_and_ride"}
+    assert body["recommendation"] == "transit"
     # 12-min tram, not the 40-min walk-only fallback.
     assert body["transit_minutes"] == 12
     assert "tram 13" in body["reason"].lower()
@@ -270,8 +269,8 @@ def test_place_names_are_geocoded():
     )
 
     assert response.status_code == 200
-    # Dry day: ranking is by time, transit (12 min) is fastest -> transit.
-    assert response.json()["recommendation"] == "transit"
+    # Dry day: bike=20, transit=12+10 bias=22, mixed=15+10=25 -> bike wins.
+    assert response.json()["recommendation"] == "bike"
 
 
 @respx.mock
@@ -328,10 +327,10 @@ def test_transit_unavailable_still_returns_bike():
 
 
 @respx.mock
-def test_buienradar_down_degrades_gracefully():
+def test_buienradar_down_degrades_to_bike():
     # One flaky upstream must not take down the recommendation: with Buienradar failing
     # and nothing cached, the endpoint still answers with rain forecast flagged unknown.
-    # Without rain data, scoring uses raw duration; transit (12 min) beats bike (20 min).
+    # Without rain data, bias kicks in: bike=20, transit=12+10=22 -> bike wins.
     respx.post(GQL_URL).mock(
         side_effect=_otp_by_modes(
             {
@@ -347,6 +346,7 @@ def test_buienradar_down_degrades_gracefully():
 
     assert response.status_code == 200
     body = response.json()
+    assert body["recommendation"] == "bike"
     assert body["rain_expected"] is None
     assert body["max_rain_mm_per_h"] is None
     assert "unavailable" in body["reason"].lower()

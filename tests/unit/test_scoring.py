@@ -64,10 +64,10 @@ def test_classify_kind_by_legs():
     assert classify_kind(walk_only) is None
 
 
-def test_dry_ranks_fastest_first():
-    # No rain: pure cost = minutes (+transfers). Bike (20) beats transit (14)? transit is faster.
+def test_dry_prefers_bike_unless_transit_saves_a_lot():
+    # Dry: bike=20 (no bias), transit=14+10 bias=24 -> bike wins.
     ordered = rank([Candidate("bike", BIKE), Candidate("transit", TRANSIT)], rain=None)
-    assert [s.kind for s in ordered] == ["transit", "bike"]
+    assert [s.kind for s in ordered] == ["bike", "transit"]
     assert ordered[0].rain_minutes == 0
 
 
@@ -90,8 +90,14 @@ def test_partial_rain_favours_bike_and_ride_over_pure_bike():
     assert ordered[0].kind == "bike_and_ride"
 
 
-def test_score_arithmetic_is_pinned():
-    # TRANSIT: 14 min total, one boarding (0 transfers), no rain -> cost == minutes.
-    s = score(Candidate("transit", TRANSIT), rain=None)
-    assert s.cost == 14.0
-    assert s.rain_minutes == 0
+def test_score_arithmetic_with_bike_preference():
+    # transit: 14 min + 10 transit-bias, no rain, 0 transfers
+    assert score(Candidate("transit", TRANSIT), rain=None).cost == 24.0
+    # bike: no bias
+    assert score(Candidate("bike", BIKE), rain=None).cost == 20.0
+
+
+def test_transit_must_beat_bike_by_more_than_bias_to_win():
+    # dry: transit saves 6 min (< 10 bias) -> bike still wins
+    winner = rank([Candidate("bike", BIKE), Candidate("transit", TRANSIT)], rain=None)[0]
+    assert winner.kind == "bike"

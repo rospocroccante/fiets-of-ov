@@ -72,6 +72,9 @@ class Weights:
     )
     heavy_penalty: float = 6.0
     transfer_penalty_min: float = 4.0
+    # Flat handicap on non-bike options so bike wins unless transit saves more than this
+    # many minutes.
+    transit_bias_min: float = 10.0
 
 
 DEFAULT_WEIGHTS = Weights()
@@ -135,7 +138,8 @@ def score(
                 rain_minutes += exposed
                 rain_cost += exposed * _rain_penalty(peak, weights)
     transfer_cost = _transfer_count(itin) * weights.transfer_penalty_min
-    cost = total_minutes + rain_cost + transfer_cost
+    bias = weights.transit_bias_min if candidate.kind != "bike" else 0.0
+    cost = total_minutes + rain_cost + transfer_cost + bias
     return ScoredCandidate(
         kind=candidate.kind,
         itinerary=itin,

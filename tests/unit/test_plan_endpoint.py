@@ -193,7 +193,7 @@ def test_plan_returns_both_itineraries_with_geometry_and_legs():
 
     assert response.status_code == 200
     body = response.json()
-    assert body["recommendation"] in {"transit", "bike_and_ride"}
+    assert body["recommendation"] == "transit"
 
     options = body["options"]
     kinds = {o["kind"] for o in options}
@@ -276,6 +276,7 @@ def test_plan_returns_ranked_options_with_bike_and_ride():
     assert kinds == {"bike", "transit", "bike_and_ride"}
     assert body["options"][0]["recommended"] is True
     assert body["recommendation"] == body["options"][0]["kind"]
+    assert body["recommendation"] == "transit"
     # ranked by ascending score
     scores = [o["score"] for o in body["options"]]
     assert scores == sorted(scores)
