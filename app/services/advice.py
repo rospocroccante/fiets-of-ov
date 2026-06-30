@@ -95,12 +95,11 @@ def _bike_handoff_stop(itinerary: Itinerary) -> str | None:
     return None
 
 
-def _reason(
-    top: ScoredCandidate, rain: RainForecast | None, rain_expected: bool | None, peak: float | None
-) -> str:
+def _reason(top: ScoredCandidate, rain_expected: bool | None, peak: float | None) -> str:
     minutes = _minutes(top.itinerary.duration)
     if rain_expected is None:
-        label = {"bike": "bike", "transit": "transit", "bike_and_ride": "bike + transit"}[top.kind]
+        _labels = {"bike": "bike", "transit": "transit", "bike_and_ride": "bike + transit"}
+        label = _labels.get(top.kind, top.kind.replace("_", " "))
         return f"rain forecast unavailable -> fastest is {label} ({minutes} min)"
     if not rain_expected:
         if top.kind == "bike":
@@ -131,7 +130,7 @@ def recommend(candidates: list[Candidate], rain: RainForecast | None) -> RankedP
     return RankedPlan(
         options=ordered,
         recommendation=top.kind,
-        reason=_reason(top, rain, rain_expected, peak),
+        reason=_reason(top, rain_expected, peak),
         max_rain_mm_per_h=peak,
         rain_expected=rain_expected,
         bike_minutes=_minutes(bike.itinerary.duration) if bike else None,

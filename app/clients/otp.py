@@ -127,20 +127,6 @@ class Plan(BaseModel):
     itineraries: list[Itinerary]
 
 
-def first_transit_itinerary(plan: Plan) -> Itinerary | None:
-    """First itinerary that actually rides transit, or None if none does.
-
-    OTP quirk: a `TRANSIT,WALK` plan can include WALK-only itineraries as fallbacks
-    (often ordered first when walking the whole trip is feasible). Those are useless as
-    a rain alternative — walking leaves the rider just as wet as cycling — so we skip
-    them and return the first itinerary with at least one non-WALK leg.
-    """
-    for itinerary in plan.itineraries:
-        if any(leg.mode != "WALK" for leg in itinerary.legs):
-            return itinerary
-    return None
-
-
 def _to_transport_modes(mode: str) -> list[dict[str, str]]:
     """Map a comma-separated mode string to the GraphQL `transportModes` list."""
     return [{"mode": part.strip()} for part in mode.split(",") if part.strip()]
