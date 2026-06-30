@@ -60,15 +60,26 @@ class ItineraryOut(BaseModel):
     legs: list[LegOut]
 
 
-class PlanResponse(BaseModel):
-    """The recommendation (as in `/v1/advice`) plus both drawable itineraries."""
+OptionKind = Literal["bike", "transit", "bike_and_ride"]
 
-    recommendation: Literal["bike", "transit"]
+
+class OptionOut(BaseModel):
+    """One ranked door-to-door option with its drawable itinerary."""
+
+    kind: OptionKind
+    recommended: bool
+    score: float  # generalized cost (sort aid; clients may ignore)
+    rain_minutes: int  # cycling/walking minutes exposed to rain (0 if dry)
+    itinerary: ItineraryOut
+
+
+class PlanResponse(BaseModel):
+    """The recommendation plus the full ranked list of drawable options."""
+
+    recommendation: OptionKind
     reason: str
     max_rain_mm_per_h: float | None
     rain_expected: bool | None
     origin: PlaceOut
     destination: PlaceOut
-    bike: ItineraryOut
-    # None when OTP found no public-transport option for the trip.
-    transit: ItineraryOut | None
+    options: list[OptionOut]  # ranked, recommended first

@@ -13,7 +13,7 @@ from pydantic import BaseModel
 class AdviceResponse(BaseModel):
     """A bike-vs-OV recommendation with the numbers behind it and a human reason."""
 
-    recommendation: Literal["bike", "transit"]
+    recommendation: Literal["bike", "transit", "bike_and_ride"]
     reason: str
     bike_minutes: int
     transit_minutes: int | None
