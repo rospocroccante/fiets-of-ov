@@ -360,3 +360,24 @@ def test_bike_routing_failure_returns_502():
     response = TestClient(app).get("/v1/advice", params={"from": "52.37,4.89", "to": "52.35,4.86"})
 
     assert response.status_code == 502
+
+
+@respx.mock
+def test_advice_no_bike_route_reports_null_bike_minutes():
+    # OTP finds no pure-bike route; advice must report bike_minutes=None, not a transit duration.
+    respx.post(GQL_URL).mock(
+        side_effect=_otp_by_modes(
+            {
+                "BICYCLE": httpx.Response(200, json=_gql([])),
+                "TRANSIT,WALK": httpx.Response(200, json=TRANSIT_JSON),
+                "BICYCLE,TRANSIT,WALK": httpx.Response(200, json=_gql([])),
+            }
+        )
+    )
+    respx.get(RAIN_URL).mock(return_value=httpx.Response(200, text=RAIN_DRY))
+    response = TestClient(app).get("/v1/advice", params={"from": "52.37,4.89", "to": "52.35,4.86"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["recommendation"] == "transit"
+    assert body["bike_minutes"] is None
+    assert body["transit_minutes"] == 12

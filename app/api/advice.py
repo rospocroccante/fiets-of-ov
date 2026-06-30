@@ -39,11 +39,6 @@ async def _resolve_place(value: str, geocoder: GeocoderClient) -> tuple[float, f
         raise HTTPException(status_code=502, detail="geocoding upstream unavailable") from exc
 
 
-def _minutes(seconds: float) -> int:
-    """Round a duration in seconds to whole minutes for human-facing output."""
-    return round(seconds / 60)
-
-
 @router.get("/v1/advice", response_model=AdviceResponse)
 async def get_advice(
     origin: str = Query(alias="from"),
@@ -69,9 +64,7 @@ async def get_advice(
     return AdviceResponse(
         recommendation=plan.recommendation,
         reason=plan.reason,
-        bike_minutes=plan.bike_minutes
-        if plan.bike_minutes is not None
-        else _minutes(plan.options[0].itinerary.duration),
+        bike_minutes=plan.bike_minutes,
         transit_minutes=plan.transit_minutes,
         max_rain_mm_per_h=plan.max_rain_mm_per_h,
         rain_expected=plan.rain_expected,

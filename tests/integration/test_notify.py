@@ -118,11 +118,13 @@ def _dry_forecast() -> RainForecast:
 
 
 class _StubOTP:
-    """Stand-in for OTPClient.plan: returns a fixed bike itinerary and transit plan.
+    """Stand-in for OTPClient.plan: returns fixed itineraries for the 3-query fan-out.
 
-    `decide()` only inspects the itineraries, so the from/to are ignored, but every call's
-    (mode, departure) is recorded so tests can assert the service plans at the trip's
-    departure. `bike=None` simulates "no bike itinerary found"; `raise_for_origin` makes the
+    The planner issues three parallel queries (BICYCLE / TRANSIT,WALK /
+    BICYCLE,TRANSIT,WALK); bike_minutes comes from the BICYCLE query result.
+    The from/to coordinates are ignored, but every call's (mode, departure) is recorded
+    so tests can assert the service plans at the trip's departure time.
+    `bike=None` simulates "no bike itinerary found"; `raise_for_origin` makes the
     BICYCLE plan raise a non-OTPError for one origin (to test mid-sweep error isolation).
     """
 

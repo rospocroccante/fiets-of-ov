@@ -99,7 +99,7 @@ def _reason(top: ScoredCandidate, rain_expected: bool | None, peak: float | None
     minutes = _minutes(top.itinerary.duration)
     if rain_expected is None:
         _labels = {"bike": "bike", "transit": "transit", "bike_and_ride": "bike + transit"}
-        label = _labels.get(top.kind, top.kind.replace("_", " "))
+        label = _labels.get(top.kind, top.kind.replace("_", " "))  # safe for any future OptionKind
         return f"rain forecast unavailable -> fastest is {label} ({minutes} min)"
     if not rain_expected:
         if top.kind == "bike":

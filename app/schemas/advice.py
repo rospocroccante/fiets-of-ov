@@ -15,7 +15,8 @@ class AdviceResponse(BaseModel):
 
     recommendation: Literal["bike", "transit", "bike_and_ride"]
     reason: str
-    bike_minutes: int
+    # Duration of the pure-bike route; None when OTP found no bike route.
+    bike_minutes: int | None
     transit_minutes: int | None
     # Peak precipitation (mm/h) forecast during the cycling window; 0.0 when dry,
     # None when the rain forecast was unavailable (degraded answer).
