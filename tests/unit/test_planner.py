@@ -87,3 +87,43 @@ async def test_all_failures_raise():
     otp = FakeOTP({}, fail={"BICYCLE", "TRANSIT,WALK", "BICYCLE,TRANSIT,WALK"})
     with pytest.raises(OTPError):
         await gather_candidates(otp, (52.37, 4.89), (52.35, 4.86))
+
+
+# --- pedestrian-deck bike snapping fallback ---
+
+_DECK = (52.3119, 4.9476)  # Bijlmer ArenA: on a pedestrian deck, no adjacent bike edge
+_ORIGIN = (52.3791, 4.9003)
+
+
+class _DeckOTP:
+    """BICYCLE routes everywhere except when an endpoint is exactly _DECK; transit routes."""
+
+    def __init__(self):
+        self.bike_targets = []
+
+    async def plan(self, *, from_place, to_place, mode, departure=None):
+        if mode == "BICYCLE":
+            self.bike_targets.append((from_place, to_place))
+            if from_place == _DECK or to_place == _DECK:
+                return Plan(itineraries=[])
+            return Plan(itineraries=[itin(leg("BICYCLE"), duration=2940.0)])
+        if mode == "TRANSIT,WALK":
+            return Plan(itineraries=[itin(leg("WALK"), leg("SUBWAY", "54"), duration=1680.0)])
+        return Plan(itineraries=[])  # mixed: none from the deck
+
+
+async def test_snap_fallback_recovers_bike_at_pedestrian_hub():
+    otp = _DeckOTP()
+    candidates = await gather_candidates(otp, _ORIGIN, _DECK)
+    kinds = sorted(c.kind for c in candidates)
+    assert kinds == ["bike", "transit"]  # bike recovered via snapping
+
+
+async def test_no_snap_when_direct_bike_exists():
+    # Ordinary trip: direct BICYCLE routes, so the fallback must not fire (only the 3
+    # fan-out BICYCLE queries — here 1 mode set uses BICYCLE alone + the mixed set).
+    otp = _DeckOTP()
+    good_dest = (52.358, 4.8686)
+    await gather_candidates(otp, _ORIGIN, good_dest)
+    # No snapping ring probes: the only BICYCLE call is the single fan-out query.
+    assert otp.bike_targets == [(_ORIGIN, good_dest)]

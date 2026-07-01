@@ -18,6 +18,7 @@ from datetime import datetime
 
 from app.clients.otp import Itinerary, OTPClient, OTPError
 from app.services.scoring import Candidate, OptionKind, classify_kind
+from app.services.snap import bike_with_snapping
 
 # The mixed set yields bike-and-ride; the pure sets guarantee a clean bike baseline (the
 # rain summary needs it) and a transit option even when the mixed plan omits them.
@@ -56,5 +57,14 @@ async def gather_candidates(
             current = best.get(kind)
             if current is None or itin.duration < current.duration:
                 best[kind] = itin
+
+    # Pedestrian-deck fallback: the trip routes (transit/walk found) but no pure-bike
+    # itinerary came back — the origin/destination likely sits on a bike-disconnected
+    # pedestrian hub. Nudge the stuck endpoint to a nearby bikeable point and retry, so a
+    # bike option still shows. Only runs on this exception path, never on the common case.
+    if "bike" not in best and best:
+        snapped = await bike_with_snapping(otp, from_place, to_place, departure)
+        if snapped is not None:
+            best["bike"] = snapped
 
     return [Candidate(kind=kind, itinerary=itin) for kind, itin in best.items()]
