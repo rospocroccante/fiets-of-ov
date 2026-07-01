@@ -14,7 +14,7 @@ import httpx
 import pytest
 import respx
 
-from app.clients.otp import Itinerary, Leg, OTPClient, OTPError, Plan, first_transit_itinerary
+from app.clients.otp import OTPClient, OTPError
 
 URL = "http://otp.test"  # host root; the client appends /otp/gtfs/v1
 GQL_URL = f"{URL}/otp/gtfs/v1"
@@ -170,27 +170,6 @@ async def test_raises_on_transport_error():
 
     with pytest.raises(OTPError):
         await OTPClient(base_url=URL).plan(from_place=FROM, to_place=TO, mode="BICYCLE")
-
-
-def _itin(*modes: str) -> Itinerary:
-    """Build an itinerary with one leg per mode; times are irrelevant to leg selection."""
-    legs = [Leg(mode=m, start_time=0, end_time=0, duration=0.0) for m in modes]
-    return Itinerary(duration=0.0, start_time=0, end_time=0, legs=legs)
-
-
-def test_first_transit_itinerary_skips_walk_only_fallback():
-    # OTP lists the WALK-only fallback first; the tram itinerary must be chosen.
-    walk_only = _itin("WALK")
-    tram = _itin("WALK", "TRAM")
-    assert first_transit_itinerary(Plan(itineraries=[walk_only, tram])) is tram
-
-
-def test_first_transit_itinerary_none_when_only_walking():
-    assert first_transit_itinerary(Plan(itineraries=[_itin("WALK")])) is None
-
-
-def test_first_transit_itinerary_none_when_empty():
-    assert first_transit_itinerary(Plan(itineraries=[])) is None
 
 
 @respx.mock

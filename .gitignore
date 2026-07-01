@@ -26,6 +26,9 @@ htmlcov/
 # Self-host OTP runtime data (jar, OSM, GTFS, built graph) — large, regenerated locally
 /otp/data/
 
+# uv lock file (generated locally; not committed)
+uv.lock
+
 # OS / editor
 .DS_Store
 .idea/

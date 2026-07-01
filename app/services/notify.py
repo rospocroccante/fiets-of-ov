@@ -9,8 +9,8 @@ The flow, per scheduler tick:
 
 1. `due_trip_alerts` selects the trip alerts whose recurrence weekday matches *today* and
    whose departure falls inside the lead window ahead of `now`.
-2. For each, `evaluate_trip_alert` plans the trip at its departure and runs the pure
-   `decide()` engine to get a recommendation (or None if the trip can't be assessed).
+2. For each, `evaluate_trip_alert` plans the trip at its departure via `gather_candidates`
+   and calls `recommend()` to get a recommendation (or None if the trip can't be assessed).
 3. `process_trip_alert` notifies — exactly once per trip per departure day — only when
    rain is actually expected on the bike leg, recording the alert in the `notifications`
    outbox first (the row is the durable, idempotent record; delivery follows).
@@ -29,11 +29,12 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.clients.otp import OTPError, first_transit_itinerary
+from app.clients.otp import OTPError
 from app.models.notification import Notification
 from app.models.trip_alert import TripAlert
 from app.schemas.advice import AdviceResponse
-from app.services.advice import decide
+from app.services.advice import recommend
+from app.services.planner import gather_candidates
 
 logger = logging.getLogger(__name__)
 
@@ -92,56 +93,32 @@ async def due_trip_alerts(
 async def evaluate_trip_alert(
     alert: TripAlert, now: datetime, otp, rain_service
 ) -> AdviceResponse | None:
-    """Plan `alert`'s trip at its departure and return the bike-vs-OV recommendation.
+    """Plan `alert`'s trip at its departure and return the recommendation, or None.
 
-    The departure is `alert.departure_time` on `now`'s date, in Amsterdam time, and is
-    passed to OTP so the plan (and thus the rain overlay) is for the actual trip, not "now".
-
-    Bike routing is mandatory: without a bike itinerary there is nothing to assess against
-    the rain, so any failure there (OTP down -> `OTPError`, or no itineraries returned)
-    yields None and the caller skips the alert. Transit is best-effort — it is only the
-    dry alternative to *offer*, so its absence still lets us decide (and warn).
-
-    Args:
-        alert: the trip alert to evaluate.
-        now: the current moment, Amsterdam-aware (its date anchors the departure).
-        otp: an OTP client exposing `plan(from_place, to_place, mode, departure)`.
-        rain_service: a rain service exposing `get_forecast(lat, lon)`.
-
-    Returns:
-        The `AdviceResponse` from `decide()`, or None when the trip can't be assessed.
+    Bike routing is still mandatory: without a bike candidate there is nothing to assess
+    against the rain, so we skip the alert (return None).
     """
     departure = datetime.combine(now.date(), alert.departure_time, tzinfo=AMS)
     origin = (alert.origin_lat, alert.origin_lon)
     destination = (alert.dest_lat, alert.dest_lon)
 
-    # Bike is required — if we can't get it, we can't assess, so skip the alert.
     try:
-        bike_plan = await otp.plan(
-            from_place=origin, to_place=destination, mode="BICYCLE", departure=departure
-        )
+        candidates = await gather_candidates(otp, origin, destination, departure=departure)
     except OTPError:
         return None
-    if not bike_plan.itineraries:
+    if not any(c.kind == "bike" for c in candidates):
         return None
-    bike = bike_plan.itineraries[0]
 
-    # Transit is best-effort: it's only the alternative we'd suggest, so OTP failing on it
-    # must not abort the decision (we can still tell the rider "rain, no OV route, raincoat").
-    transit = None
-    try:
-        transit_plan = await otp.plan(
-            from_place=origin, to_place=destination, mode="TRANSIT,WALK", departure=departure
-        )
-        transit = first_transit_itinerary(transit_plan)
-    except OTPError:
-        transit = None
-
-    # Rain overlay for the origin. The rain service already degrades to None on its own
-    # upstream failure, so we don't guard it here — `decide()` handles a None forecast.
     rain = await rain_service.get_forecast(lat=alert.origin_lat, lon=alert.origin_lon)
-
-    return decide(bike=bike, transit=transit, rain=rain)
+    plan = recommend(candidates, rain)
+    return AdviceResponse(
+        recommendation=plan.recommendation,
+        reason=plan.reason,
+        bike_minutes=plan.bike_minutes,
+        transit_minutes=plan.transit_minutes,
+        max_rain_mm_per_h=plan.max_rain_mm_per_h,
+        rain_expected=plan.rain_expected,
+    )
 
 
 async def process_trip_alert(
@@ -149,7 +126,7 @@ async def process_trip_alert(
 ) -> Notification | None:
     """Evaluate `alert` and, only if rain is expected on the bike leg, record + deliver one alert.
 
-    We notify strictly when `decide()` says rain is expected for the cycling window
+    We notify strictly when `recommend()` says rain is expected for the cycling window
     (`rain_expected is True`) — not on a dry ride, and not on the degraded None case where the
     forecast was unavailable (we never warn about rain we couldn't confirm).
 

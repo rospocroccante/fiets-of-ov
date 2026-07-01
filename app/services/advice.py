@@ -1,23 +1,18 @@
-"""The rain-aware decision engine — bike vs public transport.
+"""The rain-aware recommendation engine — bike vs public transport.
 
-This is the core of the service and, by design, a **pure function**: given a bike
-itinerary, a transit itinerary (or none), and a rain forecast, it returns a
-recommendation. No network, no clock, no I/O — everything it needs is in its
+This is the core of the service and, by design, a **pure function**: given a list of
+routing candidates and a rain forecast, it ranks them and returns the best option with a
+human-readable reason. No network, no clock, no I/O — everything it needs is in its
 arguments, which is what keeps it fully unit-testable with fixtures.
 
 The logic, step by step:
 
-1. Work out the cycling window in local wall-clock time. OTP gives absolute epoch-ms
-   timestamps; Buienradar gives `HH:MM` local slots. We convert the bike start/end to
-   Europe/Amsterdam time-of-day so the two line up. (Europe/Amsterdam is a fixed domain
-   constant for an Amsterdam-only service, not configuration.)
-2. Look at the rain slots that fall within that window and find the peak intensity.
-3. If the ride stays dry (peak below the "is it really raining" threshold) -> bike,
-   and mention when rain next arrives, if at all.
-4. If rain is expected during the ride:
-   - with a transit option -> recommend it, so the rider stays dry;
-   - with no transit option -> still recommend bike (there's no alternative), but flag
-     the rain so the answer is honest.
+1. Delegate to `scoring.rank()` which assigns each candidate a generalized cost that
+   adds rain penalties to exposed (bike/walk) minutes. Lower cost wins.
+2. Compute the rain summary (peak mm/h, wet/dry) over the **pure-bike** candidate's
+   window when one exists, so the weather banner and notifier warn-trigger remain
+   identical to the old decide() semantics.
+3. Build a human-readable reason that adapts to the top candidate's kind and rain state.
 
 The assumption tying OTP and Buienradar together is that the trip departs roughly
 "now": OTP plans from the current time and Buienradar forecasts from now, so their
@@ -25,19 +20,22 @@ wall-clock times are comparable. Good enough for the MVP; a future version could
 an explicit departure time.
 """
 
+from dataclasses import dataclass
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
 
-from app.clients.buienradar import RainForecast, RainSlot
+from app.clients.buienradar import RainForecast
 from app.clients.otp import Itinerary
-from app.schemas.advice import AdviceResponse
+from app.services.scoring import (
+    DEFAULT_RAIN_THRESHOLD_MM_H,
+    Candidate,
+    OptionKind,
+    ScoredCandidate,
+    rank,
+)
 
 # Amsterdam-only service: the local timezone is a domain constant, not config.
 LOCAL_TZ = ZoneInfo("Europe/Amsterdam")
-
-# Below this, precipitation is drizzle-or-nothing and we treat the ride as dry.
-# 0.1 mm/h corresponds to Buienradar intensity code 77 (10**((77-109)/32)).
-DEFAULT_RAIN_THRESHOLD_MM_H = 0.1
 
 
 def _local_time(epoch_ms: int) -> time:
@@ -50,105 +48,91 @@ def _minutes(seconds: float) -> int:
     return round(seconds / 60)
 
 
-def _transit_line(transit: Itinerary) -> str:
-    """Describe the transit option, e.g. "tram 13"; fall back to "public transport"."""
-    for leg in transit.legs:
-        # The first non-walking leg is the line the rider actually boards.
-        if leg.mode != "WALK" and leg.route_short_name:
-            return f"{leg.mode.lower()} {leg.route_short_name}"
-    return "public transport"
+@dataclass(frozen=True)
+class RankedPlan:
+    """The ranked options plus the rain summary and reason for the recommended one."""
+
+    options: list[ScoredCandidate]  # best first; options[0] is the recommendation
+    recommendation: OptionKind
+    reason: str
+    max_rain_mm_per_h: float | None
+    rain_expected: bool | None
+    bike_minutes: int | None
+    transit_minutes: int | None
 
 
-def decide(
-    *,
-    bike: Itinerary,
-    transit: Itinerary | None,
-    rain: RainForecast | None,
-    rain_threshold_mm_h: float = DEFAULT_RAIN_THRESHOLD_MM_H,
-) -> AdviceResponse:
-    """Recommend bike or transit for a trip, given the short-term rain forecast.
+def _rain_summary(
+    itinerary: Itinerary, rain: RainForecast | None, threshold: float
+) -> tuple[bool | None, float | None]:
+    """Peak mm/h and wet/dry over an itinerary's exposed (bike/walk) window.
 
-    `rain` is None when the forecast is unavailable (Buienradar down and no usable
-    cache). We can't assess the weather, so we degrade rather than fail: default to
-    bike — the app is bike-first — and say plainly that the forecast is unknown.
+    Returns (rain_expected, max_rain_mm_per_h). `(None, None)` when the forecast is
+    unavailable, so clients can tell "dry" (False, 0.0) from "unknown" (None, None).
     """
-    bike_minutes = _minutes(bike.duration)
-    transit_minutes = _minutes(transit.duration) if transit is not None else None
-
-    # Step 0: no forecast at all -> honest, bike-first degraded answer. The rain fields
-    # are None (not 0.0) so clients can tell "dry" apart from "we don't know".
     if rain is None:
-        return AdviceResponse(
-            recommendation="bike",
-            reason=f"rain forecast unavailable → bike ({bike_minutes} min)",
-            bike_minutes=bike_minutes,
-            transit_minutes=transit_minutes,
-            max_rain_mm_per_h=None,
-            rain_expected=None,
-        )
-
-    # Step 1: the cycling window, in local time-of-day.
-    ride_start = _local_time(bike.start_time)
-    ride_end = _local_time(bike.end_time)
-
-    # Step 2: rain slots overlapping the ride, and the peak intensity within it.
-    ride_slots = [s for s in rain.slots if ride_start <= s.time <= ride_end]
-    wet_slots = [s for s in ride_slots if s.mm_per_h >= rain_threshold_mm_h]
-    peak_mm_h = round(max((s.mm_per_h for s in ride_slots), default=0.0), 4)
-
-    # Step 3: dry ride -> bike.
-    if not wet_slots:
-        next_rain = _first_rain_after(rain, ride_end, rain_threshold_mm_h)
-        if next_rain is not None:
-            reason = (
-                f"dry during your {bike_minutes}-min ride "
-                f"(rain only from {next_rain.time:%H:%M}) → bike"
-            )
-        else:
-            reason = f"no rain expected in the next ~2h → bike ({bike_minutes} min)"
-        return AdviceResponse(
-            recommendation="bike",
-            reason=reason,
-            bike_minutes=bike_minutes,
-            transit_minutes=transit_minutes,
-            max_rain_mm_per_h=peak_mm_h,
-            rain_expected=False,
-        )
-
-    # Step 4: rain during the ride.
-    first_wet = wet_slots[0]
-    if transit is None:
-        # No alternative — recommend bike anyway, but be honest about the rain.
-        reason = (
-            f"rain expected around {first_wet.time:%H:%M} (~{peak_mm_h:g} mm/h) "
-            f"but no public-transport route found → bike ({bike_minutes} min), bring a raincoat"
-        )
-        return AdviceResponse(
-            recommendation="bike",
-            reason=reason,
-            bike_minutes=bike_minutes,
-            transit_minutes=None,
-            max_rain_mm_per_h=peak_mm_h,
-            rain_expected=True,
-        )
-
-    reason = (
-        f"rain around {first_wet.time:%H:%M} (~{peak_mm_h:g} mm/h) → "
-        f"take {_transit_line(transit)} ({transit_minutes} min)"
-    )
-    return AdviceResponse(
-        recommendation="transit",
-        reason=reason,
-        bike_minutes=bike_minutes,
-        transit_minutes=transit_minutes,
-        max_rain_mm_per_h=peak_mm_h,
-        rain_expected=True,
-    )
+        return None, None
+    start = _local_time(itinerary.start_time)
+    end = _local_time(itinerary.end_time)
+    window = [s for s in rain.slots if start <= s.time <= end]
+    peak = round(max((s.mm_per_h for s in window), default=0.0), 4)
+    expected = any(s.mm_per_h >= threshold for s in window)
+    return expected, peak
 
 
-def _first_rain_after(rain: RainForecast, after: time, threshold: float) -> RainSlot | None:
-    """First slot strictly after `after` that exceeds the rain threshold, if any."""
-    for slot in rain.slots:
-        if slot.time > after and slot.mm_per_h >= threshold:
-            return slot
+def _boarding_line(itinerary: Itinerary) -> str | None:
+    """The first transit line boarded (e.g. "metro 52"), or None for a bike-only trip."""
+    for leg in itinerary.legs:
+        if leg.mode not in {"WALK", "BICYCLE"} and leg.route_short_name:
+            return f"{leg.mode.lower()} {leg.route_short_name}"
     return None
+
+
+def _bike_handoff_stop(itinerary: Itinerary) -> str | None:
+    """Where the rider parks the bike in a bike-and-ride trip (the bike leg's end)."""
+    for leg in itinerary.legs:
+        if leg.mode == "BICYCLE":
+            return leg.to_name
+    return None
+
+
+def _reason(top: ScoredCandidate, rain_expected: bool | None, peak: float | None) -> str:
+    minutes = _minutes(top.itinerary.duration)
+    if rain_expected is None:
+        _labels = {"bike": "bike", "transit": "transit", "bike_and_ride": "bike + transit"}
+        label = _labels.get(top.kind, top.kind.replace("_", " "))  # safe for any future OptionKind
+        return f"rain forecast unavailable -> fastest is {label} ({minutes} min)"
+    if not rain_expected:
+        if top.kind == "bike":
+            return f"dry during your {minutes}-min ride -> bike"
+        return f"dry -> fastest is {top.kind.replace('_', ' ')} ({minutes} min)"
+    # Rain is expected on the bike window.
+    when = f"~{peak:g} mm/h" if peak is not None else "rain"
+    if top.kind == "transit":
+        line = _boarding_line(top.itinerary) or "public transport"
+        return f"rain ({when}) -> take {line} ({minutes} min)"
+    if top.kind == "bike_and_ride":
+        stop = _bike_handoff_stop(top.itinerary) or "the stop"
+        line = _boarding_line(top.itinerary) or "public transport"
+        return f"rain ({when}) -> bike to {stop}, then {line} ({minutes} min)"
+    return f"rain ({when}) but bike is still fastest -> bike ({minutes} min), bring a raincoat"
+
+
+def recommend(candidates: list[Candidate], rain: RainForecast | None) -> RankedPlan:
+    """Rank candidates by rain-aware cost and build the recommendation + reason."""
+    ordered = rank(candidates, rain)
+    top = ordered[0]
+
+    bike = next((c for c in ordered if c.kind == "bike"), None)
+    transit = next((c for c in ordered if c.kind == "transit"), None)
+    summary_itin = bike.itinerary if bike is not None else top.itinerary
+    rain_expected, peak = _rain_summary(summary_itin, rain, DEFAULT_RAIN_THRESHOLD_MM_H)
+
+    return RankedPlan(
+        options=ordered,
+        recommendation=top.kind,
+        reason=_reason(top, rain_expected, peak),
+        max_rain_mm_per_h=peak,
+        rain_expected=rain_expected,
+        bike_minutes=_minutes(bike.itinerary.duration) if bike else None,
+        transit_minutes=_minutes(transit.itinerary.duration) if transit else None,
+    )
