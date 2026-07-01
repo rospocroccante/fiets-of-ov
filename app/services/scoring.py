@@ -20,6 +20,7 @@ from zoneinfo import ZoneInfo
 
 from app.clients.buienradar import RainForecast
 from app.clients.otp import Itinerary, Leg
+from app.services import amsterdam
 
 LOCAL_TZ = ZoneInfo("Europe/Amsterdam")
 DEFAULT_RAIN_THRESHOLD_MM_H = 0.1
@@ -71,7 +72,13 @@ class Weights:
         (4.0, 3.0),  # moderate
     )
     heavy_penalty: float = 6.0
-    transfer_penalty_min: float = 4.0
+    # Cost of an ordinary transfer; a transfer at a major hub costs less (better
+    # cross-platform interchange, higher service frequency).
+    transfer_penalty_min: float = 5.0
+    hub_transfer_penalty_min: float = 2.0
+    # Bonuses (subtracted from cost) rewarding curated Amsterdam patterns.
+    ferry_bonus_min: float = 3.0
+    station_access_bonus_min: float = 2.0
     # Flat handicap on non-bike options so bike wins unless transit saves more than this
     # many minutes.
     transit_bias_min: float = 10.0
@@ -115,11 +122,6 @@ def _leg_rain(leg: Leg, rain: RainForecast, threshold: float) -> tuple[float, fl
     return exposed, peak
 
 
-def _transfer_count(itinerary: Itinerary) -> int:
-    boardings = sum(1 for leg in itinerary.legs if leg.mode not in _EXPOSED_MODES)
-    return max(0, boardings - 1)
-
-
 def score(
     candidate: Candidate,
     rain: RainForecast | None,
@@ -137,9 +139,21 @@ def score(
                 exposed, peak = _leg_rain(leg, rain, threshold)
                 rain_minutes += exposed
                 rain_cost += exposed * _rain_penalty(peak, weights)
-    transfer_cost = _transfer_count(itin) * weights.transfer_penalty_min
+    transfer_cost = sum(
+        weights.hub_transfer_penalty_min
+        if amsterdam.is_near_hub(lat, lon)
+        else weights.transfer_penalty_min
+        for (lat, lon) in amsterdam.transfer_points(itin)
+    )
+    ferry_bonus = weights.ferry_bonus_min if amsterdam.has_ferry(itin) else 0.0
+    station_bonus = (
+        weights.station_access_bonus_min
+        if candidate.kind == "bike_and_ride"
+        and amsterdam.is_near_hub(*(amsterdam.bike_handoff_point(itin) or (None, None)))
+        else 0.0
+    )
     bias = weights.transit_bias_min if candidate.kind != "bike" else 0.0
-    cost = total_minutes + rain_cost + transfer_cost + bias
+    cost = total_minutes + rain_cost + transfer_cost + bias - ferry_bonus - station_bonus
     return ScoredCandidate(
         kind=candidate.kind,
         itinerary=itin,

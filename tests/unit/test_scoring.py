@@ -5,6 +5,7 @@ from app.clients.buienradar import RainForecast, RainSlot
 from app.clients.otp import Itinerary, Leg
 from app.services.scoring import (
     Candidate,
+    Weights,
     classify_kind,
     rank,
     score,
@@ -17,7 +18,14 @@ def ms(hour: int, minute: int) -> int:
     return int(datetime(2026, 6, 1, hour, minute, tzinfo=TZ).timestamp() * 1000)
 
 
-def leg(mode: str, start: tuple[int, int], end: tuple[int, int], route: str | None = None) -> Leg:
+def leg(
+    mode: str,
+    start: tuple[int, int],
+    end: tuple[int, int],
+    route: str | None = None,
+    from_pt: tuple[float, float] | None = None,
+    to_pt: tuple[float, float] | None = None,
+) -> Leg:
     s, e = ms(*start), ms(*end)
     return Leg(
         mode=mode,
@@ -26,6 +34,10 @@ def leg(mode: str, start: tuple[int, int], end: tuple[int, int], route: str | No
         duration=(e - s) / 1000,
         distance=1000.0,
         route_short_name=route,
+        from_lat=from_pt[0] if from_pt else None,
+        from_lon=from_pt[1] if from_pt else None,
+        to_lat=to_pt[0] if to_pt else None,
+        to_lon=to_pt[1] if to_pt else None,
     )
 
 
@@ -101,3 +113,84 @@ def test_transit_must_beat_bike_by_more_than_bias_to_win():
     # dry: transit saves 6 min (< 10 bias) -> bike still wins
     winner = rank([Candidate("bike", BIKE), Candidate("transit", TRANSIT)], rain=None)[0]
     assert winner.kind == "bike"
+
+
+# A far-from-any-hub point used as a non-hub transfer/handoff location.
+FAR = (52.30, 4.75)
+CENTRAAL = (52.3791, 4.9003)
+
+
+def _two_transit(transfer_pt: tuple[float, float]) -> Itinerary:
+    # Two transit legs -> one transfer, at transfer_pt (the from-coords of the 2nd leg).
+    return itin(
+        leg("TRAM", (14, 0), (14, 10), route="13"),
+        leg("BUS", (14, 12), (14, 24), route="22", from_pt=transfer_pt),
+    )
+
+
+def test_transfer_penalty_is_five_per_transfer():
+    # _two_transit is 10 + 12 = 22 min. One transfer away from any hub:
+    # 22 min + 1 * 5 transfer + 10 bias = 37.
+    away = Candidate("transit", _two_transit(FAR))
+    assert score(away, rain=None).cost == 22.0 + 5.0 + 10.0
+    assert score(away, rain=None).cost == 37.0
+
+
+def test_hub_transfer_costs_less_than_ordinary_transfer():
+    # Same trip, transfer near Centraal (hub) vs. away: hub transfer is cheaper by
+    # transfer_penalty_min - hub_transfer_penalty_min = 5 - 2 = 3.
+    at_hub = Candidate("transit", _two_transit(CENTRAAL))
+    away = Candidate("transit", _two_transit(FAR))
+    assert score(away, rain=None).cost - score(at_hub, rain=None).cost == 3.0
+
+
+def test_ferry_leg_gets_bonus():
+    # A ferry crossing lowers cost by ferry_bonus_min (3.0) vs. the same trip without.
+    with_ferry = itin(
+        leg("WALK", (14, 0), (14, 2)),
+        leg("FERRY", (14, 2), (14, 8), route="F3"),
+    )
+    without = itin(
+        leg("WALK", (14, 0), (14, 2)),
+        leg("BUS", (14, 2), (14, 8), route="22"),
+    )
+    ferry_cost = score(Candidate("transit", with_ferry), rain=None).cost
+    plain_cost = score(Candidate("transit", without), rain=None).cost
+    assert plain_cost - ferry_cost == 3.0
+
+
+def test_station_access_bonus_for_bike_and_ride_ending_at_hub():
+    # bike_and_ride whose bike leg ends at a hub scores station_access_bonus_min (2.0)
+    # lower than one ending away from any hub.
+    at_hub = itin(
+        leg("BICYCLE", (14, 0), (14, 5), to_pt=CENTRAAL),
+        leg("SUBWAY", (14, 5), (14, 18), route="52"),
+    )
+    away = itin(
+        leg("BICYCLE", (14, 0), (14, 5), to_pt=FAR),
+        leg("SUBWAY", (14, 5), (14, 18), route="52"),
+    )
+    hub_cost = score(Candidate("bike_and_ride", at_hub), rain=None).cost
+    away_cost = score(Candidate("bike_and_ride", away), rain=None).cost
+    assert away_cost - hub_cost == 2.0
+
+
+def test_no_station_bonus_for_plain_bike_or_transit():
+    # A plain bike itinerary ending at a hub gets no station-access bonus.
+    bike_to_hub = Candidate(
+        "bike", itin(leg("BICYCLE", (14, 0), (14, 20), to_pt=CENTRAAL))
+    )
+    assert score(bike_to_hub, rain=None).cost == 20.0
+    # A transit itinerary is not eligible either.
+    transit_at_hub = Candidate("transit", _two_transit(CENTRAAL))
+    # 22 + 2 (hub transfer) + 10 bias = 34, no station bonus applied.
+    assert score(transit_at_hub, rain=None).cost == 34.0
+
+
+def test_custom_weights_defaults_match_spec():
+    w = Weights()
+    assert w.transfer_penalty_min == 5.0
+    assert w.hub_transfer_penalty_min == 2.0
+    assert w.ferry_bonus_min == 3.0
+    assert w.station_access_bonus_min == 2.0
+    assert w.transit_bias_min == 10.0
