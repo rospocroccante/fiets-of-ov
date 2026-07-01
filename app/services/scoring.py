@@ -168,10 +168,18 @@ def rank(
     weights: Weights = DEFAULT_WEIGHTS,
     threshold: float = DEFAULT_RAIN_THRESHOLD_MM_H,
 ) -> list[ScoredCandidate]:
-    """Score all candidates, returning them sorted ascending by cost (best first).
+    """Score all candidates, keep the lowest-cost one per kind, sorted best first.
 
-    Ties broken by shorter duration, then kind name, for deterministic ordering.
+    This is the single per-kind selection point: candidates may include several of the same
+    kind (the planner returns every classified itinerary), and only the cheapest per kind
+    survives. Ties broken by shorter duration, then kind name, for deterministic ordering.
     """
-    scored = [score(c, rain, weights, threshold) for c in candidates]
-    scored.sort(key=lambda s: (s.cost, s.itinerary.duration, s.kind))
-    return scored
+    best: dict[OptionKind, ScoredCandidate] = {}
+    for candidate in candidates:
+        scored = score(candidate, rain, weights, threshold)
+        current = best.get(scored.kind)
+        if current is None or scored.cost < current.cost:
+            best[scored.kind] = scored
+    winners = list(best.values())
+    winners.sort(key=lambda s: (s.cost, s.itinerary.duration, s.kind))
+    return winners

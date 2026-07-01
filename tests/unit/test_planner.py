@@ -60,8 +60,9 @@ async def test_walk_only_itineraries_are_dropped():
     assert candidates == []  # walk-only is no option; nothing else routed
 
 
-async def test_keeps_shortest_per_kind_across_queries():
-    # Both the transit query and the mixed query yield a transit itinerary; keep the shorter.
+async def test_returns_all_transit_candidates_across_queries():
+    # Both the transit query and the mixed query yield a transit itinerary; the planner now
+    # returns BOTH (per-kind selection moved to scoring.rank).
     otp = FakeOTP(
         {
             "TRANSIT,WALK": Plan(itineraries=[itin(leg("TRAM", "13"), duration=900.0)]),
@@ -70,8 +71,8 @@ async def test_keeps_shortest_per_kind_across_queries():
     )
     candidates = await gather_candidates(otp, (52.37, 4.89), (52.35, 4.86))
     transit = [c for c in candidates if c.kind == "transit"]
-    assert len(transit) == 1
-    assert transit[0].itinerary.duration == 600.0
+    assert len(transit) == 2
+    assert sorted(c.itinerary.duration for c in transit) == [600.0, 900.0]
 
 
 async def test_partial_failure_still_returns_other_kinds():

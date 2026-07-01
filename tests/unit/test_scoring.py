@@ -187,6 +187,18 @@ def test_no_station_bonus_for_plain_bike_or_transit():
     assert score(transit_at_hub, rain=None).cost == 34.0
 
 
+def test_rank_keeps_lowest_cost_candidate_per_kind():
+    # Two bike candidates (differing only in duration) and one transit: rank keeps the
+    # cheaper bike and the transit, best-first.
+    short_bike = Candidate("bike", itin(leg("BICYCLE", (14, 0), (14, 20))))
+    long_bike = Candidate("bike", itin(leg("BICYCLE", (14, 0), (14, 40))))
+    transit = Candidate("transit", TRANSIT)
+    ordered = rank([long_bike, short_bike, transit], rain=None)
+    assert [s.kind for s in ordered] == ["bike", "transit"]
+    bike = next(s for s in ordered if s.kind == "bike")
+    assert bike.itinerary.duration == 20 * 60  # the cheaper (shorter) bike survived
+
+
 def test_custom_weights_defaults_match_spec():
     w = Weights()
     assert w.transfer_penalty_min == 5.0
