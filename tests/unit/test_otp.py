@@ -208,7 +208,7 @@ async def test_bike_triangle_only_for_bike_modes():
     await OTPClient(base_url=URL).plan(from_place=FROM, to_place=TO, mode="BICYCLE")
     variables = json.loads(route.calls.last.request.content)["variables"]
     assert variables["optimize"] == "TRIANGLE"
-    assert variables["triangle"] == {"safety": 0.4, "slope": 0.3, "time": 0.3}
+    assert variables["triangle"] == {"safetyFactor": 0.4, "slopeFactor": 0.3, "timeFactor": 0.3}
 
     # BICYCLE,TRANSIT,WALK mode: triangle must be present
     await OTPClient(base_url=URL).plan(
@@ -216,7 +216,7 @@ async def test_bike_triangle_only_for_bike_modes():
     )
     variables = json.loads(route.calls.last.request.content)["variables"]
     assert variables["optimize"] == "TRIANGLE"
-    assert variables["triangle"] == {"safety": 0.4, "slope": 0.3, "time": 0.3}
+    assert variables["triangle"] == {"safetyFactor": 0.4, "slopeFactor": 0.3, "timeFactor": 0.3}
 
     # TRANSIT,WALK mode: optimize and triangle must be None
     respx.post(GQL_URL).mock(return_value=httpx.Response(200, json=TRANSIT))

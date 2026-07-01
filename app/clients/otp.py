@@ -36,7 +36,7 @@ _BIKE_SPEED = 4.3
 _BIKE_RELUCTANCE = 1.7
 _TRANSFER_PENALTY = 180
 _WALK_BOARD_COST = 600
-_BIKE_TRIANGLE = {"safety": 0.4, "slope": 0.3, "time": 0.3}
+_BIKE_TRIANGLE = {"safetyFactor": 0.4, "slopeFactor": 0.3, "timeFactor": 0.3}
 
 # `startTime`/`endTime` are epoch-ms Longs in the GTFS API; `route` is null off-transit.
 # `$date`/`$time` are optional plan-from-when strings (local to the OTP graph's tz); when
