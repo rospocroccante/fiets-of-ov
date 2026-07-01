@@ -26,9 +26,22 @@ from app.core.config import get_settings
 # GTFS GraphQL endpoint path appended to the OTP host root.
 _GRAPHQL_PATH = "/otp/gtfs/v1"
 
+# Amsterdam-tuned OTP routing parameters (see design doc). All verified present on the
+# running OTP2 GTFS schema.
+_NUM_ITINERARIES = 5
+_SEARCH_WINDOW_S = 5400
+_WALK_RELUCTANCE = 2.5
+_WALK_SPEED = 1.35
+_BIKE_SPEED = 4.3
+_BIKE_RELUCTANCE = 1.7
+_TRANSFER_PENALTY = 180
+_WALK_BOARD_COST = 600
+_BIKE_TRIANGLE = {"safety": 0.4, "slope": 0.3, "time": 0.3}
+
 # `startTime`/`endTime` are epoch-ms Longs in the GTFS API; `route` is null off-transit.
 # `$date`/`$time` are optional plan-from-when strings (local to the OTP graph's tz); when
 # both are null OTP plans from "now", so existing "plan now" callers are unaffected.
+# `$optimize`/`$triangle` are only sent for BICYCLE-containing modes (see plan()).
 _PLAN_QUERY = """
 query Plan(
   $from: InputCoordinates!
@@ -37,6 +50,15 @@ query Plan(
   $num: Int
   $date: String
   $time: String
+  $searchWindow: Long
+  $walkReluctance: Float
+  $walkSpeed: Float
+  $bikeSpeed: Float
+  $bikeReluctance: Float
+  $transferPenalty: Int
+  $walkBoardCost: Int
+  $optimize: OptimizeType
+  $triangle: InputTriangle
 ) {
   plan(
     from: $from
@@ -45,6 +67,15 @@ query Plan(
     numItineraries: $num
     date: $date
     time: $time
+    searchWindow: $searchWindow
+    walkReluctance: $walkReluctance
+    walkSpeed: $walkSpeed
+    bikeSpeed: $bikeSpeed
+    bikeReluctance: $bikeReluctance
+    transferPenalty: $transferPenalty
+    walkBoardCost: $walkBoardCost
+    optimize: $optimize
+    triangle: $triangle
   ) {
     itineraries {
       duration
@@ -195,14 +226,26 @@ class OTPClient:
 
         Raises `OTPError` on any failure so the caller never receives a fabricated route.
         """
+        is_bike_mode = "BICYCLE" in mode
         variables = {
             "from": {"lat": from_place[0], "lon": from_place[1]},
             "to": {"lat": to_place[0], "lon": to_place[1]},
             "modes": _to_transport_modes(mode),
-            "num": 3,
+            "num": _NUM_ITINERARIES,
             # OTP expects date/time as separate strings; null on both => plan from "now".
             "date": departure.strftime("%Y-%m-%d") if departure is not None else None,
             "time": departure.strftime("%H:%M:%S") if departure is not None else None,
+            # Amsterdam-tuned routing parameters.
+            "searchWindow": _SEARCH_WINDOW_S,
+            "walkReluctance": _WALK_RELUCTANCE,
+            "walkSpeed": _WALK_SPEED,
+            "bikeSpeed": _BIKE_SPEED,
+            "bikeReluctance": _BIKE_RELUCTANCE,
+            "transferPenalty": _TRANSFER_PENALTY,
+            "walkBoardCost": _WALK_BOARD_COST,
+            # Safe bike routing only applies to modes that include BICYCLE.
+            "optimize": "TRIANGLE" if is_bike_mode else None,
+            "triangle": _BIKE_TRIANGLE if is_bike_mode else None,
         }
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:

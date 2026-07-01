@@ -182,3 +182,45 @@ async def test_raises_on_malformed_itinerary():
 
     with pytest.raises(OTPError):
         await OTPClient(base_url=URL).plan(from_place=FROM, to_place=TO, mode="BICYCLE")
+
+
+@respx.mock
+async def test_plan_sends_tuned_routing_params():
+    """Amsterdam-tuned parameters are sent to OTP on every plan call."""
+    route = respx.post(GQL_URL).mock(return_value=httpx.Response(200, json=BIKE))
+
+    await OTPClient(base_url=URL).plan(from_place=FROM, to_place=TO, mode="BICYCLE")
+
+    variables = json.loads(route.calls.last.request.content)["variables"]
+    assert variables["num"] == 5
+    assert variables["searchWindow"] == 5400
+    assert variables["walkReluctance"] == 2.5
+    assert variables["bikeSpeed"] == 4.3
+    assert variables["transferPenalty"] == 180
+
+
+@respx.mock
+async def test_bike_triangle_only_for_bike_modes():
+    """optimize/triangle are sent for BICYCLE-containing modes and absent for transit-only."""
+    route = respx.post(GQL_URL).mock(return_value=httpx.Response(200, json=BIKE))
+
+    # BICYCLE mode: triangle must be present
+    await OTPClient(base_url=URL).plan(from_place=FROM, to_place=TO, mode="BICYCLE")
+    variables = json.loads(route.calls.last.request.content)["variables"]
+    assert variables["optimize"] == "TRIANGLE"
+    assert variables["triangle"] == {"safety": 0.4, "slope": 0.3, "time": 0.3}
+
+    # BICYCLE,TRANSIT,WALK mode: triangle must be present
+    await OTPClient(base_url=URL).plan(
+        from_place=FROM, to_place=TO, mode="BICYCLE,TRANSIT,WALK"
+    )
+    variables = json.loads(route.calls.last.request.content)["variables"]
+    assert variables["optimize"] == "TRIANGLE"
+    assert variables["triangle"] == {"safety": 0.4, "slope": 0.3, "time": 0.3}
+
+    # TRANSIT,WALK mode: optimize and triangle must be None
+    respx.post(GQL_URL).mock(return_value=httpx.Response(200, json=TRANSIT))
+    await OTPClient(base_url=URL).plan(from_place=FROM, to_place=TO, mode="TRANSIT,WALK")
+    variables = json.loads(route.calls.last.request.content)["variables"]
+    assert variables["optimize"] is None
+    assert variables["triangle"] is None
