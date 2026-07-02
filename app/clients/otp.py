@@ -36,7 +36,7 @@ _BIKE_SPEED = 4.7
 _BIKE_RELUCTANCE = 1.7
 _TRANSFER_PENALTY = 180
 _WALK_BOARD_COST = 600
-# Time-dominant: direct routes like a local rides. Residual safety weight keeps the
+# Time-dominant: direct routes, the way a local rides. Residual safety weight keeps the
 # fietspad preference over parallel car roads; slope is irrelevant in flat Amsterdam.
 _BIKE_TRIANGLE = {"safetyFactor": 0.3, "slopeFactor": 0.0, "timeFactor": 0.7}
 

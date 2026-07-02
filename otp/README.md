@@ -50,3 +50,5 @@ The OTP client posts to the OTP2 **GTFS GraphQL** API at `${OTP_BASE_URL}/otp/gt
   `OTP_HEAP` for the native script, or `JAVA_TOOL_OPTIONS` for Docker).
 - Coverage is GVB within the Amsterdam OSM extract. To widen it, use a larger OSM
   extract and/or keep more operators when filtering the GTFS.
+- Changes to `router-config.json` (e.g. the accessEgress stop-count cap) take effect on
+  OTP server restart — no graph rebuild needed.

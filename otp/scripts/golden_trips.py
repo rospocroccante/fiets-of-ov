@@ -29,6 +29,7 @@ from app.clients.otp import (
     _BIKE_RELUCTANCE,
     _BIKE_SPEED,
     _BIKE_TRIANGLE,
+    _GRAPHQL_PATH,
     _NUM_ITINERARIES,
     _PLAN_QUERY,
     _SEARCH_WINDOW_S,
@@ -82,7 +83,7 @@ def plan_bike(
         "triangle": _BIKE_TRIANGLE,
     }
     response = client.post(
-        f"{otp}/otp/gtfs/v1", json={"query": _PLAN_QUERY, "variables": variables}
+        f"{otp}{_GRAPHQL_PATH}", json={"query": _PLAN_QUERY, "variables": variables}
     )
     response.raise_for_status()
     data = response.json()

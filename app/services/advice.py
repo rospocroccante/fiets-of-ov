@@ -71,6 +71,9 @@ def _rain_summary(
     """
     if rain is None:
         return None, None
+    # Window spans the whole bike itinerary, including any sheltered FERRY minutes;
+    # intentionally coarse for this banner — cost math (scoring.py) handles exposure
+    # per leg.
     start = _local_time(itinerary.start_time)
     end = _local_time(itinerary.end_time)
     window = [s for s in rain.slots if start <= s.time <= end]

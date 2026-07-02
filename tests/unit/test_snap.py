@@ -24,7 +24,8 @@ def _bike_plan() -> Plan:
 
 
 class _DeckOTP:
-    """OTP stub: BICYCLE routes fine everywhere EXCEPT when an endpoint is exactly DECK."""
+    """OTP stub: the bike query (BIKE_MODES, bike+ferry) routes fine everywhere EXCEPT
+    when an endpoint is exactly DECK."""
 
     def __init__(self) -> None:
         self.bike_calls: list[tuple] = []

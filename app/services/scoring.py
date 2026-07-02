@@ -174,7 +174,9 @@ def rank(
 
     This is the single per-kind selection point: candidates may include several of the same
     kind (the planner returns every classified itinerary), and only the cheapest per kind
-    survives. Ties broken by shorter duration, then kind name, for deterministic ordering.
+    survives — the comparison is strict (<), so on an exact cost tie the first-encountered
+    candidate of that kind is kept. The final winners (one per kind) are then sorted by
+    cost, with ties broken by shorter duration, then kind name, for deterministic ordering.
     """
     best: dict[OptionKind, ScoredCandidate] = {}
     for candidate in candidates:

@@ -29,8 +29,9 @@ MAJOR_HUBS: tuple[tuple[str, float, float], ...] = (
     ("Muiderpoort", 52.3603, 4.9280),
 )
 
-# Leg modes that represent non-transit movement; everything else is transit.
-_TRANSIT_MODES: frozenset[str] = frozenset({"WALK", "BICYCLE"})
+# Leg modes that represent street (non-transit) movement; transit legs are those whose
+# mode is not in this set.
+_STREET_MODES: frozenset[str] = frozenset({"WALK", "BICYCLE"})
 
 
 def is_near_hub(lat: float | None, lon: float | None) -> bool:
@@ -51,12 +52,12 @@ def transfer_points(itinerary: Itinerary) -> list[tuple[float, float]]:
     """Return the (lat, lon) of each transfer point in the itinerary.
 
     A transfer occurs between consecutive transit boardings.  Transit legs are
-    those whose mode is not in _TRANSIT_MODES (i.e. not WALK or BICYCLE).  For
+    those whose mode is not in _STREET_MODES (i.e. not WALK or BICYCLE).  For
     each transit leg after the first transit leg, the from-coordinates of that
     leg are the transfer point — one point per transfer.  Legs with missing
     from-coordinates are silently omitted.
     """
-    transit_legs = [leg for leg in itinerary.legs if leg.mode not in _TRANSIT_MODES]
+    transit_legs = [leg for leg in itinerary.legs if leg.mode not in _STREET_MODES]
     points: list[tuple[float, float]] = []
     for leg in transit_legs[1:]:
         if leg.from_lat is not None and leg.from_lon is not None:
