@@ -13,7 +13,7 @@ unit-testable with fixtures (mirroring the discipline of the old `decide()`).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, time
 from typing import Literal
 from zoneinfo import ZoneInfo
@@ -84,6 +84,11 @@ class Weights:
     # Flat handicap on non-bike options so bike wins unless transit saves more than this
     # many minutes.
     transit_bias_min: float = 10.0
+    # Cost per minute of departing later than the earliest candidate. For a plan-now
+    # query a minute spent waiting to leave is a minute of trip time, so a shorter
+    # itinerary that departs much later (e.g. a sparse ferry line) must not outrank
+    # one leaving now.
+    depart_delay_factor: float = 1.0
 
 
 DEFAULT_WEIGHTS = Weights()
@@ -177,10 +182,22 @@ def rank(
     survives — the comparison is strict (<), so on an exact cost tie the first-encountered
     candidate of that kind is kept. The final winners (one per kind) are then sorted by
     cost, with ties broken by shorter duration, then kind name, for deterministic ordering.
+
+    Departure delay is part of the cost: OTP's search window returns itineraries leaving
+    up to ~90 min apart, and the earliest candidate's start is the "now" reference — every
+    minute a candidate departs after it is added via `weights.depart_delay_factor`.
     """
+    if not candidates:
+        return []
+    reference_ms = min(c.itinerary.start_time for c in candidates)
     best: dict[OptionKind, ScoredCandidate] = {}
     for candidate in candidates:
         scored = score(candidate, rain, weights, threshold)
+        delay_min = (candidate.itinerary.start_time - reference_ms) / 60000
+        if delay_min:
+            scored = replace(
+                scored, cost=round(scored.cost + delay_min * weights.depart_delay_factor, 4)
+            )
         current = best.get(scored.kind)
         if current is None or scored.cost < current.cost:
             best[scored.kind] = scored

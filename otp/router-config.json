@@ -1,8 +1,8 @@
 {
   "routingDefaults": {
-    "numItineraries": 5,
+    "numItineraries": 8,
     "bicycle": {
-      "speed": 4.7
+      "speed": 5.0
     },
     "accessEgress": {
       "maxDuration": "45m",

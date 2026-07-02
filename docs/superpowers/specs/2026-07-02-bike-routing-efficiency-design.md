@@ -162,3 +162,24 @@ golden-trip script exits non-zero if any trip errors, so regressions are loud.
 - Faster, more direct bike routes lower bike costs relative to transit, so the bike option
   wins more often in recommendations. This is the intended effect; the existing
   `transit_bias_min` (10 min) still protects transit when it is clearly better.
+
+## Addendum (2026-07-02, second tuning round): closing the gap with Google Maps
+
+User comparison (Zuid -> NDSM): Google 30 min vs our 38-44. Root causes found and fixed:
+
+1. `intersectionTraversalModel` SIMPLE (see section 3) — fixed earlier the same day.
+2. `_BIKE_SPEED` 4.7 -> 5.0 (18 km/h cruise, ~16.3 km/h effective door-to-door with
+   CONSTANT intersections — matches Google's bike estimates within a minute on all
+   golden trips; evidence: `2026-07-02-golden-trips-final.txt`).
+3. `_NUM_ITINERARIES` 5 -> 8: the fastest ferry variant (F7 Pontsteiger, Google's route)
+   was often itinerary #6+ and never reached the ranker.
+4. `scoring.rank` now counts DEPARTURE DELAY as cost (`Weights.depart_delay_factor`,
+   1.0 min/min against the earliest candidate's start). Without it, raising the
+   itinerary count made the ranker prefer a 33-min ferry route leaving in 50 minutes
+   over a 38-min one leaving now. With it, the recommendation is the best door-to-door
+   answer from "now".
+
+Honest remaining gap vs Google on IJ trips: Google assumes the ideal ferry with zero
+wait and an optimistic crossing (F7 headway is ~30 min midday; F4 crossing is a real
+14 min). Our answer fluctuates 33-39 min with the actual timetable; when a ferry
+aligns, we match Google's number with a route a local would actually catch.

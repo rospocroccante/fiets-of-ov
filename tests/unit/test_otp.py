@@ -192,10 +192,10 @@ async def test_plan_sends_tuned_routing_params():
     await OTPClient(base_url=URL).plan(from_place=FROM, to_place=TO, mode="BICYCLE")
 
     variables = json.loads(route.calls.last.request.content)["variables"]
-    assert variables["num"] == 5
+    assert variables["num"] == 8
     assert variables["searchWindow"] == 5400
     assert variables["walkReluctance"] == 2.5
-    assert variables["bikeSpeed"] == 4.7
+    assert variables["bikeSpeed"] == 5.0
     assert variables["transferPenalty"] == 180
 
 

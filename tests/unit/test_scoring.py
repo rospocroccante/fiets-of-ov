@@ -230,3 +230,25 @@ def test_custom_weights_defaults_match_spec():
     assert w.ferry_bonus_min == 3.0
     assert w.station_access_bonus_min == 2.0
     assert w.transit_bias_min == 10.0
+
+def test_rank_counts_departure_delay_as_cost():
+    # Plan-now: a 34-min ride leaving in 57 min is worse than a 38-min ride leaving now.
+    now_bike = itin(leg("BICYCLE", (14, 0), (14, 38)))
+    later_bike = itin(leg("BICYCLE", (14, 57), (15, 31)))
+    ordered = rank([Candidate("bike", later_bike), Candidate("bike", now_bike)], rain=None)
+    assert len(ordered) == 1  # one winner per kind
+    assert ordered[0].itinerary is now_bike
+
+
+def test_rank_departure_delay_applies_across_kinds():
+    # Transit leaving 30 min later accrues those minutes; bike leaving now wins even
+    # though transit's ride is shorter than bias+delay can absorb.
+    late_transit = itin(
+        leg("WALK", (14, 30), (14, 32)),
+        leg("TRAM", (14, 32), (14, 44), route="13"),
+    )
+    ordered = rank([Candidate("bike", BIKE), Candidate("transit", late_transit)], rain=None)
+    assert ordered[0].kind == "bike"
+    transit_scored = next(s for s in ordered if s.kind == "transit")
+    # 12+2=14 min ride + 10 bias + 30 delay = 54
+    assert transit_scored.cost == 54.0
