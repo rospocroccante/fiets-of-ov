@@ -16,9 +16,13 @@ User-reported, three concrete failures for bike routing:
    timeFactor: 0.3}` puts only 30% weight on time. Slope weight is wasted (Amsterdam is
    flat), and the safety weight makes OTP detour for "safe" streets in a city where nearly
    every street is already bike-safe. Routes come out longer than what a local would ride.
-2. **Incomplete coverage.** The graph is built from the BBBike `Amsterdam.osm.pbf` extract,
-   whose bounding box clips the city edges (parts of Zuidoost, outer Noord, Amstelveen,
-   Diemen). Trips touching the clipped area fail or produce truncated routes.
+2. **Absurd IJ crossings.** ~~Incomplete coverage~~ — DISPROVEN by the golden-trip baseline
+   (2026-07-02): all eight trips including Amstelveen and Diemen route fine on the BBBike
+   extract (its bbox is (4.56,52.03)-(5.21,52.51), far larger than assumed). The real
+   route-quality failure the baseline exposed: pure-bike trips crossing the IJ detour 2.6x
+   (NDSM -> Osdorpplein: 21.8 km for an 8.4 km crow-fly) because mode `BICYCLE` excludes
+   ferries (FERRY is a transit mode), so OTP rides around the water. Real Amsterdam
+   cyclists roll their bike onto the free GVB ferry.
 3. **Wrong time estimates.** `bikeSpeed 4.3 m/s` (15.5 km/h) is slow for a Dutch utility
    cyclist (~17 km/h). Config is also internally inconsistent: `router-config.json` says
    `bicycle.speed: 4.5` while the client sends 4.3.
@@ -29,18 +33,20 @@ would actually ride, not the maximally safe one.
 ## Goals
 
 1. Bike (and bike-leg) routes are direct: time-dominant triangle.
-2. The graph covers all of gemeente Amsterdam plus bordering municipalities.
+2. Pure-bike trips may use GVB ferries for IJ crossings (bike+ferry stays kind "bike").
 3. Estimated bike minutes match reality for an average Dutch cyclist.
 4. Before/after evidence via a golden-trip validation script.
 
 ## Non-goals (YAGNI)
 
+- No OSM extract swap: the baseline proved the BBBike extract already covers Amstelveen,
+  Diemen, and beyond. The golden edge trips stay as coverage regression checks.
 - No second routing engine (GraphHopper etc.). Escalate only if OTP still produces bad
   routes after this tuning, with golden-trip evidence.
 - No per-user route-style preference (fast vs relaxed) in UI or API.
-- No GTFS coverage change: the transit feed stays filtered to GVB. The coverage failure is
-  in the street (OSM) graph, not transit.
-- No frontend or API schema changes.
+- No GTFS coverage change: the transit feed stays filtered to GVB.
+- No frontend or API schema changes (`kind` values are unchanged; a bike+ferry itinerary
+  reports kind "bike" and its FERRY leg renders like any transit leg).
 
 ## Design
 
@@ -55,16 +61,21 @@ Everything else in the query (searchWindow, reluctances, transfer costs, the
 optimize/triangle-only-for-BICYCLE-modes gating) is unchanged. Not pure `QUICK`: zero
 safety weight risks routing down busy car roads where a parallel fietspad exists.
 
-### 2. OSM coverage (`otp/`)
+### 2. Bike+ferry for IJ crossings (`app/services/planner.py`, `scoring.py`, `snap.py`)
 
-- Replace the BBBike extract with Geofabrik
-  `https://download.geofabrik.de/europe/netherlands/noord-holland-latest.osm.pbf`
-  (~130 MB). Covers the whole gemeente plus Amstelveen, Diemen, Ouder-Amstel, Zaandam.
-- `otp/build-config.json`: `osm.source` -> `noord-holland-latest.osm.pbf`.
-- `otp/README.md`: update the data-file table and download instructions.
-- Rebuild: delete `otp/data/graph.obj`, re-run `otp/scripts/run_otp.sh` (build is one-time;
-  default 8g heap is expected to suffice for a provincial extract — if the build OOMs,
-  raise `OTP_HEAP`).
+- New shared constant `BIKE_MODES = "BICYCLE,FERRY"` in `planner.py`; used by
+  `_MODE_SETS` (replacing `"BICYCLE"`), by `snap.py`'s probe query, and imported by the
+  golden-trip script so the benchmark keeps sending exactly what the app sends.
+- `scoring.classify_kind`: an itinerary with bike legs whose only transit mode is FERRY
+  stays kind `"bike"` (a cyclist rolls the bike onto the ferry — still a bike trip).
+  Bike + any non-ferry transit remains `"bike_and_ride"`; ferry/walk without bike remains
+  `"transit"`; walk-only remains dropped.
+- Rain exposure is already correct (FERRY not in `_EXPOSED_MODES`); the existing
+  `ferry_bonus_min` now also rewards bike+ferry candidates — intended.
+- Live risk, verified in validation: OTP only puts bikes on transit legs whose GTFS trips
+  allow bikes. If the GVB feed lacks `bikes_allowed` on ferry trips, no ferry leg will
+  appear; the contingency (NOT in this spec's scope — escalate first) is patching
+  `otp/scripts/filter_gtfs_gvb.py` to set it and rebuilding the graph.
 
 ### 3. Config alignment (`otp/router-config.json`)
 
@@ -86,11 +97,15 @@ For each trip it prints distance (m), duration (min), and straight-line detour r
 (route distance / haversine distance). Output is compared before/after the change and
 against external references (Google Maps bike estimates) by hand; expected outcomes:
 
-- detour ratio drops on trips where the old triangle detoured,
-- edge trips (Amstelveen, Diemen) return routes instead of failing,
+- the two IJ-crossing trips (NDSM -> Osdorpplein, De Pijp -> Noorderpark) drop from
+  detour ~2.6 to roughly direct via a FERRY leg,
+- detour ratio does not get dramatically worse on any other trip,
+- edge trips (Amstelveen, Diemen) keep returning routes (coverage regression check),
 - durations land within ~10% of external references.
 
-Run once on the old graph+params before implementing (baseline capture), once after.
+Baseline captured 2026-07-02 on the old graph+params
+(`docs/superpowers/evidence/2026-07-02-golden-trips-baseline.txt`); after-run compared
+against it.
 
 ## Error handling
 
@@ -102,25 +117,24 @@ golden-trip script exits non-zero if any trip errors, so regressions are loud.
 
 - `tests/unit/test_otp.py`: update the asserted values for `bikeSpeed` (4.7) and the
   triangle (`{0.3, 0.0, 0.7}`); the presence/absence gating tests stay as-is.
-- Existing scoring/planner/advice tests: unaffected (no cost-model change). Any test that
-  hard-codes 4.3 gets updated.
+- `tests/unit/test_scoring.py`: classify_kind cases — bike+ferry -> "bike", bike+tram ->
+  "bike_and_ride" (unchanged), ferry+walk -> "transit" (unchanged).
+- `tests/unit/test_planner.py` / `test_snap.py`: assert the bike queries send
+  `BIKE_MODES` ("BICYCLE,FERRY").
 - Live validation via the golden-trip script (section 4), evidence captured in the verify
   step.
 
 ## File structure
 
 - Create: `otp/scripts/golden_trips.py`.
-- Modify: `app/clients/otp.py`, `otp/build-config.json`, `otp/router-config.json`,
-  `otp/README.md`, `tests/unit/test_otp.py`.
-- Rebuilt artifact (not committed): `otp/data/graph.obj` from
-  `noord-holland-latest.osm.pbf`.
+- Modify: `app/clients/otp.py`, `app/services/planner.py`, `app/services/scoring.py`,
+  `app/services/snap.py`, `otp/router-config.json`, and the tests listed above.
 
 ## Risks / notes
 
 - Triangle and speed values remain judgment calls; the golden-trip script exists precisely
   to check them against reality, and they are single documented constants to adjust.
-- The provincial extract grows the graph (build time and memory). One-time build cost;
-  if 8g heap fails, raise `OTP_HEAP`.
+- Bike-on-ferry depends on the GTFS `bikes_allowed` flag (see section 2 live risk).
 - Faster, more direct bike routes lower bike costs relative to transit, so the bike option
   wins more often in recommendations. This is the intended effect; the existing
   `transit_bias_min` (10 min) still protects transit when it is clearly better.
