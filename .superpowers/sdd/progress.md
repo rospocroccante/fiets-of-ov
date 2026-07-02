@@ -67,3 +67,29 @@ Root cause: NOT distance/coverage/config. OTP correctly returns 0 BICYCLE itiner
 Fix: app/services/snap.py bike_with_snapping() - fallback ring probe (~220m/440m, nearest-first) re-asking OTP with the stuck endpoint nudged; integrated in gather_candidates only when no bike candidate but trip routable. Fallback-only (no extra calls common path).
 Verified: 134 tests pass (+5), ruff clean; LIVE Centraal->Bijlmer ArenA now returns bike(49min)+transit(27min) - previously transit-only.
 Commit 74ab13e on feat/multimodal-rain-aware-routing (pushed, updates PR #1).
+
+## Plan: bike routing efficiency (2026-07-02)
+Branch: feat/amsterdam-pathfinding
+Plan: docs/superpowers/plans/2026-07-02-bike-routing-efficiency.md
+Base: e01496c (plan commit)
+Task 1: complete (commits e01496c..36f61b7, review clean, no fixes)
+  Minor deferred: distance sums all legs incl walk access (brief-mandated); dead nan guard; /otp/gtfs/v1 literal not imported (brief-mandated)
+Task 2: complete (commits 36f61b7..bf97b04, no review needed - evidence capture). ALL 8 trips SUCCEEDED on old graph incl Amstelveen/Diemen -> coverage premise DISPROVEN (BBBike bbox already huge). Real finding: IJ-crossing bike trips detour 2.6x (NDSM->Osdorp 21.8km, DePijp->Noorderpark 11.5km) because mode BICYCLE excludes FERRY.
+REPLAN (user-approved): Task 4 OSM swap DROPPED (YAGNI); replaced with bike+ferry task (BIKE_MODES="BICYCLE,FERRY" in otp.py; classify_kind bike+ferry-only->bike; snap.py + golden script use BIKE_MODES; router-config alignment folded in). Spec+plan updated accordingly.
+Task 3: complete (commits f226269..e46fe41, review clean, no fixes). 126 passed.
+  Minor deferred: otp.py comment grammar "like a local rides"
+Task 4: complete (commits e46fe41..1ae3137, review clean, no fixes). 130 passed, ruff clean.
+  PROCESS NOTE: first two implementer dispatches misbehaved (one spawned a rogue child, one killed mid-run); finisher agent audited the mixed tree and committed. TDD RED evidence lost. Reviewer verified: no duplicate tests, truth table exact, ferry_bonus interaction sound.
+  Minor deferred: test_snap.py _DeckOTP docstring not updated to mention ferry; report redundancy (cosmetic)
+Task 5: complete (commits 1ae3137..856dd5e). Controller took over after live STOP condition (agent correctly caught it).
+  ROOT CAUSE chain: (1) OTP 2.6 default accessEgress.maxStopCount=500 aborts bike egress search ~12 bike-min out in dense center -> ferry docks never reached -> no bike+ferry itineraries. Fixed in router-config.json (maxStopCount 5000, maxDuration 45m explicit) + server restart. (2) golden_trips.py took itineraries[0]; OTP orders slower direct bike first -> script now picks fastest (mirrors scoring.rank cheapest-per-kind).
+  Evidence: NDSM->Osdorp 99.9->48.6min detour 2.58->1.26 via FERRY; DePijp->Noorderpark 53.6->30.5min 2.61->1.21 via FERRY; others 3-7% faster; edge trips still route; 130 tests green.
+  E2E verified via live app on :8001: /v1/plan NDSM->Osdorp returns recommendation=bike, 49min, legs BICYCLE FERRY(F7) BICYCLE, transit 69min not recommended.
+  DEPLOY NOTE: router-config change needs OTP restart (no rebuild). Running local OTP already restarted with new config.
+FINAL WHOLE-BRANCH REVIEW (fable, merge-base da68805..856dd5e): READY TO MERGE, zero Critical/Important.
+Polish commit 1ad4303 (7 minor items: _STREET_MODES rename, _GRAPHQL_PATH import, comment grammar, _DeckOTP docstring, README restart note, rank docstring, advice rain-window comment). 130 passed, ruff clean.
+Open items for human at finish:
+- .superpowers/sdd/progress.md tracked in repo history (workflow residue) - gitignore vs keep
+- maxStopCount 500->5000 not load-tested (server-side cost on every transit query)
+- optional planner-level bike+ferry flow test (covered live, not by unit fixture)
+BRANCH COMPLETE. HEAD=1ad4303.
