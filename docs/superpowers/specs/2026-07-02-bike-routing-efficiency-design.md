@@ -93,6 +93,18 @@ safety weight risks routing down busy car roads where a parallel fietspad exists
 - Benchmark selection: OTP can order the slower direct ride ahead of a bike+ferry
   itinerary, so `golden_trips.py` picks the fastest returned itinerary, mirroring the
   app's cheapest-per-kind selection in `scoring.rank` rather than trusting OTP's order.
+- `intersectionTraversalModel: "CONSTANT"` — the default SIMPLE model adds turn-angle
+  traversal time at every intersection, which in Amsterdam's dense grid inflated bike
+  durations by a near-constant ~1.5 min/km (measured: Zuid -> Centraal 6.15 km took
+  31.5 min, an effective 11.7 km/h, versus ~16 km/h on Google Maps and in reality).
+  With CONSTANT the same leg takes 23.7 min (15.5 km/h effective) at the same
+  `bikeSpeed 4.7` — matching a Dutch cyclist door-to-door. Evidence:
+  `2026-07-02-golden-trips-after-constant-intersections.txt` (all eight trips at
+  15-16 km/h effective; Centraal -> Bijlmer 43.2 -> 35.9 min). Trade-off: SIMPLE's
+  per-turn costs marginally favour fewer-turn routes; the bike triangle's safety
+  weight still steers route choice, so the loss is acceptable for honest durations.
+  Remaining gap vs Google on ferry trips is the real GVB schedule wait plus actual
+  crossing time, which Google does not count.
 
 ### 4. Golden-trip validation (`otp/scripts/golden_trips.py`, new)
 

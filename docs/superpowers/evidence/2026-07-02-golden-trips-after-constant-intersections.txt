@@ -1,0 +1,10 @@
+bikeSpeed=4.7 triangle={'safetyFactor': 0.3, 'slopeFactor': 0.0, 'timeFactor': 0.7}
+trip                                    km    min  detour  modes
+Centraal -> Bijlmer ArenA             9.33   35.9    1.15  BICYCLE
+NDSM -> Osdorpplein                  10.77   41.6    1.27  BICYCLE,FERRY
+Centraal -> Amstelveen Stadshart     11.13   42.2    1.23  BICYCLE
+Diemen Sniep -> Vondelpark            8.95   33.7    1.24  BICYCLE
+Zuid -> Sloterdijk                    7.61   30.0    1.26  BICYCLE
+IJburg -> Centraal                    9.41   35.5    1.29  BICYCLE
+De Pijp -> Noorderpark                5.34   24.1    1.21  BICYCLE,FERRY
+Science Park -> RAI                   5.83   24.1    1.23  BICYCLE

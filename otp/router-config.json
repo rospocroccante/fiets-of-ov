@@ -1,10 +1,13 @@
 {
   "routingDefaults": {
     "numItineraries": 5,
-    "bicycle": { "speed": 4.7 },
+    "bicycle": {
+      "speed": 4.7
+    },
     "accessEgress": {
       "maxDuration": "45m",
       "maxStopCount": 5000
-    }
+    },
+    "intersectionTraversalModel": "CONSTANT"
   }
 }
