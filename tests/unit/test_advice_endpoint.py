@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 from app.api.deps import get_geocoder_client, get_otp_client, get_rain_service
 from app.clients.buienradar import BuienradarClient
 from app.clients.geocoder import GeocodeNotFound
-from app.clients.otp import OTPClient
+from app.clients.otp import BIKE_MODES, OTPClient
 from app.core.cache import InMemoryCache
 from app.main import app
 from app.services.rain import RainService
@@ -184,7 +184,7 @@ def test_rain_during_ride_returns_transit():
     respx.post(GQL_URL).mock(
         side_effect=_otp_by_modes(
             {
-                "BICYCLE": httpx.Response(200, json=BIKE_JSON),
+                BIKE_MODES: httpx.Response(200, json=BIKE_JSON),
                 "TRANSIT,WALK": httpx.Response(200, json=TRANSIT_JSON),
                 "BICYCLE,TRANSIT,WALK": httpx.Response(200, json=MIXED_JSON),
             }
@@ -208,7 +208,7 @@ def test_walk_only_itinerary_first_is_skipped_for_real_transit():
     respx.post(GQL_URL).mock(
         side_effect=_otp_by_modes(
             {
-                "BICYCLE": httpx.Response(200, json=BIKE_JSON),
+                BIKE_MODES: httpx.Response(200, json=BIKE_JSON),
                 "TRANSIT,WALK": httpx.Response(200, json=TRANSIT_JSON_WALK_FIRST),
                 "BICYCLE,TRANSIT,WALK": httpx.Response(200, json=MIXED_JSON),
             }
@@ -233,7 +233,7 @@ def test_walk_only_transit_plan_falls_back_to_bike():
     respx.post(GQL_URL).mock(
         side_effect=_otp_by_modes(
             {
-                "BICYCLE": httpx.Response(200, json=BIKE_JSON),
+                BIKE_MODES: httpx.Response(200, json=BIKE_JSON),
                 "TRANSIT,WALK": httpx.Response(200, json=_gql([_WALK_ONLY_ITIN])),
                 "BICYCLE,TRANSIT,WALK": httpx.Response(200, json=_gql([])),
             }
@@ -256,7 +256,7 @@ def test_place_names_are_geocoded():
     respx.post(GQL_URL).mock(
         side_effect=_otp_by_modes(
             {
-                "BICYCLE": httpx.Response(200, json=BIKE_JSON),
+                BIKE_MODES: httpx.Response(200, json=BIKE_JSON),
                 "TRANSIT,WALK": httpx.Response(200, json=TRANSIT_JSON),
                 "BICYCLE,TRANSIT,WALK": httpx.Response(200, json=MIXED_JSON),
             }
@@ -310,7 +310,7 @@ def test_transit_unavailable_still_returns_bike():
     respx.post(GQL_URL).mock(
         side_effect=_otp_by_modes(
             {
-                "BICYCLE": httpx.Response(200, json=BIKE_JSON),
+                BIKE_MODES: httpx.Response(200, json=BIKE_JSON),
                 "TRANSIT,WALK": httpx.Response(503),
                 "BICYCLE,TRANSIT,WALK": httpx.Response(503),
             }
@@ -334,7 +334,7 @@ def test_buienradar_down_degrades_to_bike():
     respx.post(GQL_URL).mock(
         side_effect=_otp_by_modes(
             {
-                "BICYCLE": httpx.Response(200, json=BIKE_JSON),
+                BIKE_MODES: httpx.Response(200, json=BIKE_JSON),
                 "TRANSIT,WALK": httpx.Response(200, json=TRANSIT_JSON),
                 "BICYCLE,TRANSIT,WALK": httpx.Response(200, json=MIXED_JSON),
             }
@@ -368,7 +368,7 @@ def test_advice_no_bike_route_reports_null_bike_minutes():
     respx.post(GQL_URL).mock(
         side_effect=_otp_by_modes(
             {
-                "BICYCLE": httpx.Response(200, json=_gql([])),
+                BIKE_MODES: httpx.Response(200, json=_gql([])),
                 "TRANSIT,WALK": httpx.Response(200, json=TRANSIT_JSON),
                 "BICYCLE,TRANSIT,WALK": httpx.Response(200, json=_gql([])),
             }

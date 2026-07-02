@@ -1,7 +1,7 @@
 """Candidate generation: ask OTP for bike, transit, and bike-and-ride options at once.
 
 The single source of routing candidates for `/v1/plan`, `/v1/advice`, and the rain-alert
-notifier. It fans out three OTP queries concurrently — BICYCLE, TRANSIT+WALK, and
+notifier. It fans out three OTP queries concurrently — BICYCLE+FERRY, TRANSIT+WALK, and
 BICYCLE+TRANSIT+WALK — pools every itinerary, classifies each by its leg modes, and drops
 walk-only trips. It returns every classified candidate; the per-kind winner is chosen later
 by generalized cost in `scoring.rank`. OTP does the real multimodal routing; this
@@ -17,13 +17,13 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime
 
-from app.clients.otp import OTPClient, OTPError
+from app.clients.otp import BIKE_MODES, OTPClient, OTPError
 from app.services.scoring import Candidate, classify_kind
 from app.services.snap import bike_with_snapping
 
 # The mixed set yields bike-and-ride; the pure sets guarantee a clean bike baseline (the
 # rain summary needs it) and a transit option even when the mixed plan omits them.
-_MODE_SETS = ("BICYCLE", "TRANSIT,WALK", "BICYCLE,TRANSIT,WALK")
+_MODE_SETS = (BIKE_MODES, "TRANSIT,WALK", "BICYCLE,TRANSIT,WALK")
 
 
 async def gather_candidates(

@@ -1,6 +1,6 @@
 {
   "routingDefaults": {
-    "numItineraries": 3,
-    "bicycle": { "speed": 4.5 }
+    "numItineraries": 5,
+    "bicycle": { "speed": 4.7 }
   }
 }

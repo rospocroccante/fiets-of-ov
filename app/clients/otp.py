@@ -40,6 +40,10 @@ _WALK_BOARD_COST = 600
 # fietspad preference over parallel car roads; slope is irrelevant in flat Amsterdam.
 _BIKE_TRIANGLE = {"safetyFactor": 0.3, "slopeFactor": 0.0, "timeFactor": 0.7}
 
+# Pure-bike trips may use GVB ferries (free, bikes roll on) for IJ crossings; FERRY-only
+# transit keeps kind "bike" in classify_kind. Shared by planner, snap, and the benchmark.
+BIKE_MODES = "BICYCLE,FERRY"
+
 # `startTime`/`endTime` are epoch-ms Longs in the GTFS API; `route` is null off-transit.
 # `$date`/`$time` are optional plan-from-when strings (local to the OTP graph's tz); when
 # both are null OTP plans from "now", so existing "plan now" callers are unaffected.

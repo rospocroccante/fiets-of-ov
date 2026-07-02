@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 from app.api.deps import get_geocoder_client, get_otp_client, get_rain_service
 from app.clients.buienradar import BuienradarClient
 from app.clients.geocoder import GeocodeNotFound
-from app.clients.otp import OTPClient
+from app.clients.otp import BIKE_MODES, OTPClient
 from app.core.cache import InMemoryCache
 from app.main import app
 from app.services.rain import RainService
@@ -181,7 +181,7 @@ def test_plan_returns_both_itineraries_with_geometry_and_legs():
     respx.post(GQL_URL).mock(
         side_effect=_otp_by_modes(
             {
-                "BICYCLE": httpx.Response(200, json=BIKE_JSON),
+                BIKE_MODES: httpx.Response(200, json=BIKE_JSON),
                 "TRANSIT,WALK": httpx.Response(200, json=TRANSIT_JSON),
                 "BICYCLE,TRANSIT,WALK": httpx.Response(200, json=MIXED_JSON),
             }
@@ -221,7 +221,7 @@ def test_plan_transit_unavailable_returns_bike_only():
     respx.post(GQL_URL).mock(
         side_effect=_otp_by_modes(
             {
-                "BICYCLE": httpx.Response(200, json=BIKE_JSON),
+                BIKE_MODES: httpx.Response(200, json=BIKE_JSON),
                 "TRANSIT,WALK": httpx.Response(503),
                 "BICYCLE,TRANSIT,WALK": httpx.Response(503),
             }
@@ -260,7 +260,7 @@ def test_plan_returns_ranked_options_with_bike_and_ride():
     respx.post(GQL_URL).mock(
         side_effect=_otp_by_modes(
             {
-                "BICYCLE": httpx.Response(200, json=BIKE_JSON),
+                BIKE_MODES: httpx.Response(200, json=BIKE_JSON),
                 "TRANSIT,WALK": httpx.Response(200, json=TRANSIT_JSON),
                 "BICYCLE,TRANSIT,WALK": httpx.Response(200, json=MIXED_JSON),
             }

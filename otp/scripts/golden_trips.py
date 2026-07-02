@@ -36,6 +36,8 @@ from app.clients.otp import (
     _WALK_BOARD_COST,
     _WALK_RELUCTANCE,
     _WALK_SPEED,
+    BIKE_MODES,
+    _to_transport_modes,
 )
 from app.services.geo import haversine_m
 
@@ -65,7 +67,7 @@ def plan_bike(
     variables = {
         "from": {"lat": from_lat, "lon": from_lon},
         "to": {"lat": to_lat, "lon": to_lon},
-        "modes": [{"mode": "BICYCLE"}],
+        "modes": _to_transport_modes(BIKE_MODES),
         "num": _NUM_ITINERARIES,
         "date": None,
         "time": None,
@@ -101,7 +103,7 @@ def main() -> int:
     otp = args.otp.rstrip("/")
 
     print(f"bikeSpeed={_BIKE_SPEED} triangle={_BIKE_TRIANGLE}")
-    print(f"{'trip':<34} {'km':>7} {'min':>6} {'detour':>7}")
+    print(f"{'trip':<34} {'km':>7} {'min':>6} {'detour':>7}  modes")
     failures = 0
     with httpx.Client(timeout=30.0) as client:
         for name, from_lat, from_lon, to_lat, to_lon in TRIPS:
@@ -115,7 +117,10 @@ def main() -> int:
             minutes = itin["duration"] / 60
             crow_m = haversine_m(from_lat, from_lon, to_lat, to_lon)
             detour = distance_m / crow_m if crow_m else float("nan")
-            print(f"{name:<34} {distance_m / 1000:>7.2f} {minutes:>6.1f} {detour:>7.2f}")
+            leg_modes = ",".join(dict.fromkeys(leg["mode"] for leg in itin["legs"]))
+            print(
+                f"{name:<34} {distance_m / 1000:>7.2f} {minutes:>6.1f} {detour:>7.2f}  {leg_modes}"
+            )
     if failures:
         print(f"{failures}/{len(TRIPS)} trips failed", file=sys.stderr)
     return 1 if failures else 0

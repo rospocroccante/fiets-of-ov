@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.clients.otp import Itinerary, Leg, Plan
+from app.clients.otp import BIKE_MODES, Itinerary, Leg, Plan
 from app.services.scoring import classify_kind
 from app.services.snap import bike_with_snapping
 
@@ -28,10 +28,12 @@ class _DeckOTP:
 
     def __init__(self) -> None:
         self.bike_calls: list[tuple] = []
+        self.modes: list[str] = []
 
     async def plan(self, *, from_place, to_place, mode, departure=None) -> Plan:
-        if mode == "BICYCLE":
+        if mode == BIKE_MODES:
             self.bike_calls.append((from_place, to_place))
+            self.modes.append(mode)
             if from_place == DECK or to_place == DECK:
                 return Plan(itineraries=[])  # on the deck: no bikeable edge
             return _bike_plan()
@@ -47,6 +49,8 @@ async def test_snaps_destination_off_the_deck():
     # beyond the offsets); the winning call used a to_place != DECK.
     assert all(to != DECK or frm == ORIGIN for frm, to in otp.bike_calls)
     assert any(to != DECK for _, to in otp.bike_calls)
+    # Every probe used the bike+ferry mode so IJ-adjacent snaps can still cross by ferry.
+    assert all(m == BIKE_MODES for m in otp.modes)
 
 
 async def test_snaps_origin_when_origin_is_the_deck():

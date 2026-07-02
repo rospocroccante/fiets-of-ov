@@ -1,6 +1,6 @@
 import pytest
 
-from app.clients.otp import Itinerary, Leg, OTPError, Plan
+from app.clients.otp import BIKE_MODES, Itinerary, Leg, OTPError, Plan
 from app.services.planner import gather_candidates
 
 
@@ -39,7 +39,7 @@ class FakeOTP:
 async def test_gathers_one_best_candidate_per_kind():
     otp = FakeOTP(
         {
-            "BICYCLE": Plan(itineraries=[itin(leg("BICYCLE"), duration=1200.0)]),
+            BIKE_MODES: Plan(itineraries=[itin(leg("BICYCLE"), duration=1200.0)]),
             "TRANSIT,WALK": Plan(
                 itineraries=[itin(leg("WALK"), leg("TRAM", "13"), duration=720.0)]
             ),
@@ -51,7 +51,15 @@ async def test_gathers_one_best_candidate_per_kind():
     candidates = await gather_candidates(otp, (52.37, 4.89), (52.35, 4.86))
     kinds = sorted(c.kind for c in candidates)
     assert kinds == ["bike", "bike_and_ride", "transit"]
-    assert set(otp.calls) == {"BICYCLE", "TRANSIT,WALK", "BICYCLE,TRANSIT,WALK"}
+    assert set(otp.calls) == {BIKE_MODES, "TRANSIT,WALK", "BICYCLE,TRANSIT,WALK"}
+
+
+async def test_bike_query_includes_ferry():
+    # Pure-bike trips must be able to use GVB ferries for IJ crossings.
+    fake = FakeOTP({})
+    await gather_candidates(fake, (52.37, 4.89), (52.35, 4.86))
+    assert BIKE_MODES == "BICYCLE,FERRY"
+    assert BIKE_MODES in fake.calls
 
 
 async def test_walk_only_itineraries_are_dropped():
@@ -77,7 +85,7 @@ async def test_returns_all_transit_candidates_across_queries():
 
 async def test_partial_failure_still_returns_other_kinds():
     otp = FakeOTP(
-        {"BICYCLE": Plan(itineraries=[itin(leg("BICYCLE"), duration=1200.0)])},
+        {BIKE_MODES: Plan(itineraries=[itin(leg("BICYCLE"), duration=1200.0)])},
         fail={"TRANSIT,WALK", "BICYCLE,TRANSIT,WALK"},
     )
     candidates = await gather_candidates(otp, (52.37, 4.89), (52.35, 4.86))
@@ -85,7 +93,7 @@ async def test_partial_failure_still_returns_other_kinds():
 
 
 async def test_all_failures_raise():
-    otp = FakeOTP({}, fail={"BICYCLE", "TRANSIT,WALK", "BICYCLE,TRANSIT,WALK"})
+    otp = FakeOTP({}, fail={BIKE_MODES, "TRANSIT,WALK", "BICYCLE,TRANSIT,WALK"})
     with pytest.raises(OTPError):
         await gather_candidates(otp, (52.37, 4.89), (52.35, 4.86))
 
@@ -97,13 +105,13 @@ _ORIGIN = (52.3791, 4.9003)
 
 
 class _DeckOTP:
-    """BICYCLE routes everywhere except when an endpoint is exactly _DECK; transit routes."""
+    """Bike+ferry routes everywhere except when an endpoint is exactly _DECK; transit routes."""
 
     def __init__(self):
         self.bike_targets = []
 
     async def plan(self, *, from_place, to_place, mode, departure=None):
-        if mode == "BICYCLE":
+        if mode == BIKE_MODES:
             self.bike_targets.append((from_place, to_place))
             if from_place == _DECK or to_place == _DECK:
                 return Plan(itineraries=[])
@@ -121,10 +129,10 @@ async def test_snap_fallback_recovers_bike_at_pedestrian_hub():
 
 
 async def test_no_snap_when_direct_bike_exists():
-    # Ordinary trip: direct BICYCLE routes, so the fallback must not fire (only the 3
-    # fan-out BICYCLE queries — here 1 mode set uses BICYCLE alone + the mixed set).
+    # Ordinary trip: direct bike+ferry routes, so the fallback must not fire (only the 3
+    # fan-out queries — here 1 mode set uses bike+ferry alone + the mixed set).
     otp = _DeckOTP()
     good_dest = (52.358, 4.8686)
     await gather_candidates(otp, _ORIGIN, good_dest)
-    # No snapping ring probes: the only BICYCLE call is the single fan-out query.
+    # No snapping ring probes: the only bike+ferry call is the single fan-out query.
     assert otp.bike_targets == [(_ORIGIN, good_dest)]

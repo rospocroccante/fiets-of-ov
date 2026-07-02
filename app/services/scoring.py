@@ -34,17 +34,19 @@ _EXPOSED_MODES = {"BICYCLE", "WALK"}
 def classify_kind(itinerary: Itinerary) -> OptionKind | None:
     """Classify an itinerary by its leg modes, or None for a useless walk-only trip.
 
-    bike: a BICYCLE leg, no transit. transit: a transit leg, no BICYCLE. bike_and_ride:
-    both. None: only WALK legs (a walk leaves the rider just as wet as cycling).
+    bike: BICYCLE legs with no transit beyond FERRY (a cyclist rolls the bike onto the
+    free GVB ferry, so bike+ferry is still a bike trip). transit: a transit leg, no
+    BICYCLE. bike_and_ride: BICYCLE plus non-ferry transit. None: only WALK legs (a walk
+    leaves the rider just as wet as cycling).
     """
     has_bike = any(leg.mode == "BICYCLE" for leg in itinerary.legs)
-    has_transit = any(leg.mode not in _EXPOSED_MODES for leg in itinerary.legs)
-    if has_bike and has_transit:
+    transit_modes = {leg.mode for leg in itinerary.legs} - _EXPOSED_MODES
+    if has_bike and transit_modes - {"FERRY"}:
         return "bike_and_ride"
-    if has_transit:
-        return "transit"
     if has_bike:
         return "bike"
+    if transit_modes:
+        return "transit"
     return None
 
 

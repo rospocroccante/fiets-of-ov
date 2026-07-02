@@ -1,7 +1,7 @@
 """Snap a pedestrian-hub coordinate to a nearby bikeable point.
 
 Big transit hubs (Bijlmer ArenA, elevated stations) sit on pedestrian decks with no
-bike-traversable edge adjacent, so OTP returns zero BICYCLE itineraries when an endpoint
+bike-traversable edge adjacent, so OTP returns zero bikeable itineraries when an endpoint
 lands exactly on the deck — even though the surrounding streets bike fine and walking
 routes there without trouble. OTP is not wrong (you cannot start a ride standing on the
 deck); the input coordinate is just a pedestrian centroid.
@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from app.clients.otp import Itinerary, OTPClient, OTPError
+from app.clients.otp import BIKE_MODES, Itinerary, OTPClient, OTPError
 from app.services.scoring import classify_kind
 
 # Offsets (dlat, dlon) probed around a stuck endpoint: a ~220 m ring, then a ~440 m ring.
@@ -53,9 +53,10 @@ async def _bike(
     to: tuple[float, float],
     departure: datetime | None,
 ) -> Itinerary | None:
-    """One BICYCLE query; None on OTPError or no bike itinerary (a failed probe is skipped)."""
+    """One bike (BICYCLE+FERRY) query; None on OTPError or no bike itinerary (a failed
+    probe is skipped)."""
     try:
-        plan = await otp.plan(from_place=frm, to_place=to, mode="BICYCLE", departure=departure)
+        plan = await otp.plan(from_place=frm, to_place=to, mode=BIKE_MODES, departure=departure)
     except OTPError:
         return None
     return _first_bike(plan)

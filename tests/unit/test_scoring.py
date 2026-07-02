@@ -76,6 +76,30 @@ def test_classify_kind_by_legs():
     assert classify_kind(walk_only) is None
 
 
+def test_classify_bike_plus_ferry_stays_bike():
+    # A cyclist rolls the bike onto the GVB ferry: still a bike trip, not bike_and_ride.
+    ferry_bike = itin(
+        leg("BICYCLE", (14, 0), (14, 8)),
+        leg("FERRY", (14, 8), (14, 14)),
+        leg("BICYCLE", (14, 14), (14, 25)),
+    )
+    assert classify_kind(ferry_bike) == "bike"
+
+
+def test_classify_bike_plus_ferry_plus_tram_is_bike_and_ride():
+    mixed = itin(
+        leg("BICYCLE", (14, 0), (14, 8)),
+        leg("FERRY", (14, 8), (14, 14)),
+        leg("TRAM", (14, 14), (14, 25), route="13"),
+    )
+    assert classify_kind(mixed) == "bike_and_ride"
+
+
+def test_classify_ferry_without_bike_is_transit():
+    ferry_walk = itin(leg("WALK", (14, 0), (14, 5)), leg("FERRY", (14, 5), (14, 15)))
+    assert classify_kind(ferry_walk) == "transit"
+
+
 def test_dry_prefers_bike_unless_transit_saves_a_lot():
     # Dry: bike=20 (no bias), transit=14+10 bias=24 -> bike wins.
     ordered = rank([Candidate("bike", BIKE), Candidate("transit", TRANSIT)], rain=None)
