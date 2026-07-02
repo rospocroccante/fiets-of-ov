@@ -71,7 +71,7 @@ safety weight risks routing down busy car roads where a parallel fietspad exists
 `routingDefaults` must not contradict what the client sends (client values win at request
 time, but drift invites confusion): `bicycle.speed` 4.5 -> 4.7, `numItineraries` 3 -> 5.
 
-### 4. Golden-trip validation (`scripts/golden_trips.py`, new)
+### 4. Golden-trip validation (`otp/scripts/golden_trips.py`, new)
 
 A standalone script (not a unit test — needs the live OTP at :8080) that runs ~8-10 fixed
 bike trips spanning the city and its edges, e.g.:
@@ -109,7 +109,7 @@ golden-trip script exits non-zero if any trip errors, so regressions are loud.
 
 ## File structure
 
-- Create: `scripts/golden_trips.py`.
+- Create: `otp/scripts/golden_trips.py`.
 - Modify: `app/clients/otp.py`, `otp/build-config.json`, `otp/router-config.json`,
   `otp/README.md`, `tests/unit/test_otp.py`.
 - Rebuilt artifact (not committed): `otp/data/graph.obj` from
