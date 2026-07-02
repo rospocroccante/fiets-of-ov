@@ -195,7 +195,7 @@ async def test_plan_sends_tuned_routing_params():
     assert variables["num"] == 5
     assert variables["searchWindow"] == 5400
     assert variables["walkReluctance"] == 2.5
-    assert variables["bikeSpeed"] == 4.3
+    assert variables["bikeSpeed"] == 4.7
     assert variables["transferPenalty"] == 180
 
 
@@ -208,7 +208,7 @@ async def test_bike_triangle_only_for_bike_modes():
     await OTPClient(base_url=URL).plan(from_place=FROM, to_place=TO, mode="BICYCLE")
     variables = json.loads(route.calls.last.request.content)["variables"]
     assert variables["optimize"] == "TRIANGLE"
-    assert variables["triangle"] == {"safetyFactor": 0.4, "slopeFactor": 0.3, "timeFactor": 0.3}
+    assert variables["triangle"] == {"safetyFactor": 0.3, "slopeFactor": 0.0, "timeFactor": 0.7}
 
     # BICYCLE,TRANSIT,WALK mode: triangle must be present
     await OTPClient(base_url=URL).plan(
@@ -216,7 +216,7 @@ async def test_bike_triangle_only_for_bike_modes():
     )
     variables = json.loads(route.calls.last.request.content)["variables"]
     assert variables["optimize"] == "TRIANGLE"
-    assert variables["triangle"] == {"safetyFactor": 0.4, "slopeFactor": 0.3, "timeFactor": 0.3}
+    assert variables["triangle"] == {"safetyFactor": 0.3, "slopeFactor": 0.0, "timeFactor": 0.7}
 
     # TRANSIT,WALK mode: optimize and triangle must be None
     respx.post(GQL_URL).mock(return_value=httpx.Response(200, json=TRANSIT))

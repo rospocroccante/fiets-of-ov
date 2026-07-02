@@ -32,11 +32,13 @@ _NUM_ITINERARIES = 5
 _SEARCH_WINDOW_S = 5400
 _WALK_RELUCTANCE = 2.5
 _WALK_SPEED = 1.35
-_BIKE_SPEED = 4.3
+_BIKE_SPEED = 4.7
 _BIKE_RELUCTANCE = 1.7
 _TRANSFER_PENALTY = 180
 _WALK_BOARD_COST = 600
-_BIKE_TRIANGLE = {"safetyFactor": 0.4, "slopeFactor": 0.3, "timeFactor": 0.3}
+# Time-dominant: direct routes like a local rides. Residual safety weight keeps the
+# fietspad preference over parallel car roads; slope is irrelevant in flat Amsterdam.
+_BIKE_TRIANGLE = {"safetyFactor": 0.3, "slopeFactor": 0.0, "timeFactor": 0.7}
 
 # `startTime`/`endTime` are epoch-ms Longs in the GTFS API; `route` is null off-transit.
 # `$date`/`$time` are optional plan-from-when strings (local to the OTP graph's tz); when
