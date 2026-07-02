@@ -91,7 +91,10 @@ def plan_bike(
     itineraries = ((data.get("data") or {}).get("plan") or {}).get("itineraries") or []
     if not itineraries:
         raise RuntimeError("no itineraries")
-    return itineraries[0]
+    # Fastest, not OTP's first: the app pools all itineraries and picks the cheapest per
+    # kind in scoring.rank, so OTP's own ordering (which can put the slower direct ride
+    # ahead of a bike+ferry option) must not decide the benchmark either.
+    return min(itineraries, key=lambda it: it["duration"])
 
 
 def main() -> int:

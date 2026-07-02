@@ -77,10 +77,22 @@ safety weight risks routing down busy car roads where a parallel fietspad exists
   appear; the contingency (NOT in this spec's scope — escalate first) is patching
   `otp/scripts/filter_gtfs_gvb.py` to set it and rebuilding the graph.
 
-### 3. Config alignment (`otp/router-config.json`)
+### 3. Router config (`otp/router-config.json`)
 
-`routingDefaults` must not contradict what the client sends (client values win at request
-time, but drift invites confusion): `bicycle.speed` 4.5 -> 4.7, `numItineraries` 3 -> 5.
+- Alignment: `routingDefaults` must not contradict what the client sends (client values
+  win at request time, but drift invites confusion): `bicycle.speed` 4.5 -> 4.7,
+  `numItineraries` 3 -> 5.
+- `accessEgress: { maxDuration: "45m", maxStopCount: 5000 }` — REQUIRED for bike+ferry to
+  work in practice. Discovered live: OTP 2.6's default `maxStopCount` (500) aborts the
+  bike access/egress street search after touching 500 stops, which in Amsterdam's dense
+  center happens ~11-12 bike-minutes out — before reaching the IJ ferry docks — so Raptor
+  never saw a ferry option for any trip whose endpoint sits more than ~12 bike-minutes
+  from a dock. Raising the cap surfaces bike+ferry itineraries (verified: NDSM ->
+  Osdorpplein 99.9 -> 48.6 min). Deploy note: router-config changes need an OTP server
+  restart (no graph rebuild).
+- Benchmark selection: OTP can order the slower direct ride ahead of a bike+ferry
+  itinerary, so `golden_trips.py` picks the fastest returned itinerary, mirroring the
+  app's cheapest-per-kind selection in `scoring.rank` rather than trusting OTP's order.
 
 ### 4. Golden-trip validation (`otp/scripts/golden_trips.py`, new)
 
