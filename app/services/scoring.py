@@ -84,16 +84,16 @@ class Weights:
     # Flat handicap on non-bike options so bike wins unless transit saves more than this
     # many minutes.
     transit_bias_min: float = 10.0
-    # Cost per minute of departing later than the earliest candidate. Product choice
-    # (2026-07-02): default 0 — the card shows the FASTEST trip Google-style, and the
-    # frontend's "Leave at HH:MM" label makes the wait visible instead of pricing it
-    # in. Set to ~1.0 to prefer leave-now options for a strict door-to-door ranking.
-    depart_delay_factor: float = 0.0
-    # Only candidates departing within this many minutes of their kind's earliest
-    # departure compete: the fastest trip is worthless if you must loiter half an hour
-    # for it (e.g. a sparse F7 sailing). Per kind, so a mode whose next service is
-    # further out is not wiped from the options.
-    max_depart_wait_min: float = 15.0
+    # Cost per minute of departing later than the kind's earliest candidate: waiting
+    # for a sailing is trip time, so the 16 km land loop around the IJ can never beat
+    # "wait 10 min for the ferry" — while the card still shows the winner's own ride
+    # time plus a "Leave at HH:MM" label, keeping the displayed number low.
+    depart_delay_factor: float = 1.0
+    # Safety valve: candidates departing further than this beyond their kind's earliest
+    # option never compete, however fast, so the card never advertises a departure the
+    # user must loiter half an hour for. Per kind, so a mode with sparse service is not
+    # wiped from the options.
+    max_depart_wait_min: float = 30.0
 
 
 DEFAULT_WEIGHTS = Weights()
@@ -188,7 +188,7 @@ def rank(
     candidate of that kind is kept. The final winners (one per kind) are then sorted by
     cost, with ties broken by shorter duration, then kind name, for deterministic ordering.
 
-    Departure handling: OTP's search window returns itineraries leaving up to ~90 min
+    Departure handling: OTP's search window returns itineraries leaving up to ~60 min
     apart. Within each kind, only candidates departing within `weights.max_depart_wait_min`
     of that kind's earliest departure compete — the fastest sailing is no use if it leaves
     in half an hour. Any residual delay can additionally be priced in per minute via

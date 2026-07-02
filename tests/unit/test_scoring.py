@@ -231,22 +231,31 @@ def test_custom_weights_defaults_match_spec():
     assert w.station_access_bonus_min == 2.0
     assert w.transit_bias_min == 10.0
 
-def test_rank_shows_fastest_within_the_departure_window():
-    # Product default: fastest trip wins, but only among departures within
-    # max_depart_wait_min (15) of the kind's earliest option.
-    now_bike = itin(leg("BICYCLE", (14, 0), (14, 38)))
-    soon_bike = itin(leg("BICYCLE", (14, 10), (14, 44)))  # 34 min, departs +10: competes
-    ordered = rank([Candidate("bike", now_bike), Candidate("bike", soon_bike)], rain=None)
+def test_waiting_for_a_much_faster_ride_beats_the_land_loop():
+    # Direct 59-min loop around the IJ leaving now vs a 38-min ferry ride leaving in
+    # 16 min: 38+16 < 59, so waiting wins — no local rides around the water.
+    land_loop = itin(leg("BICYCLE", (14, 0), (14, 59)))
+    ferry_soon = itin(leg("BICYCLE", (14, 16), (14, 54)))
+    ordered = rank([Candidate("bike", land_loop), Candidate("bike", ferry_soon)], rain=None)
     assert len(ordered) == 1  # one winner per kind
-    assert ordered[0].itinerary is soon_bike
+    assert ordered[0].itinerary is ferry_soon
 
 
-def test_rank_drops_departures_beyond_the_window():
-    # A faster ride leaving 57 min out is no answer to "how do I go now".
+def test_marginally_faster_but_later_departure_loses():
+    # A 34-min ride leaving in 10 min costs 34+10 and loses to a 38-min ride leaving now.
     now_bike = itin(leg("BICYCLE", (14, 0), (14, 38)))
-    later_bike = itin(leg("BICYCLE", (14, 57), (15, 31)))  # 34 min, departs +57: dropped
-    ordered = rank([Candidate("bike", later_bike), Candidate("bike", now_bike)], rain=None)
+    soon_bike = itin(leg("BICYCLE", (14, 10), (14, 44)))
+    ordered = rank([Candidate("bike", soon_bike), Candidate("bike", now_bike)], rain=None)
     assert ordered[0].itinerary is now_bike
+
+
+def test_departures_beyond_the_cap_never_compete():
+    # A 15-min ride leaving 40 min out would win on ride+wait (55 < 59) but is beyond
+    # max_depart_wait_min (30): the card must not advertise a departure that far away.
+    land_loop = itin(leg("BICYCLE", (14, 0), (14, 59)))
+    far_ferry = itin(leg("BICYCLE", (14, 40), (14, 55)))
+    ordered = rank([Candidate("bike", far_ferry), Candidate("bike", land_loop)], rain=None)
+    assert ordered[0].itinerary is land_loop
 
 
 def test_departure_window_is_per_kind():
@@ -258,15 +267,3 @@ def test_departure_window_is_per_kind():
     )
     ordered = rank([Candidate("bike", BIKE), Candidate("transit", late_transit)], rain=None)
     assert {s.kind for s in ordered} == {"bike", "transit"}
-
-
-def test_depart_delay_factor_prices_waiting_within_the_window():
-    # With the factor enabled, a 34-min ride leaving in 10 min costs 34+10 and loses
-    # to a 38-min ride leaving now.
-    now_bike = itin(leg("BICYCLE", (14, 0), (14, 38)))
-    soon_bike = itin(leg("BICYCLE", (14, 10), (14, 44)))
-    strict = Weights(depart_delay_factor=1.0)
-    ordered = rank(
-        [Candidate("bike", soon_bike), Candidate("bike", now_bike)], rain=None, weights=strict
-    )
-    assert ordered[0].itinerary is now_bike

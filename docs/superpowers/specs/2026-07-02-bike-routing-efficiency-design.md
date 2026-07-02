@@ -171,13 +171,21 @@ User comparison (Zuid -> NDSM): Google 30 min vs our 38-44. Root causes found an
 2. `_BIKE_SPEED` 4.7 -> 5.0 (18 km/h cruise, ~16.3 km/h effective door-to-door with
    CONSTANT intersections — matches Google's bike estimates within a minute on all
    golden trips; evidence: `2026-07-02-golden-trips-final.txt`).
-3. `_NUM_ITINERARIES` 5 -> 8: the fastest ferry variant (F7 Pontsteiger, Google's route)
-   was often itinerary #6+ and never reached the ranker.
-4. `scoring.rank` now counts DEPARTURE DELAY as cost (`Weights.depart_delay_factor`,
-   1.0 min/min against the earliest candidate's start). Without it, raising the
-   itinerary count made the ranker prefer a 33-min ferry route leaving in 50 minutes
-   over a 38-min one leaving now. With it, the recommendation is the best door-to-door
-   answer from "now".
+3. `_NUM_ITINERARIES` 5 -> 12 and `_SEARCH_WINDOW_S` 5400 -> 3600: the fastest ferry
+   variant (F7 Pontsteiger, Google's route) was often itinerary #6+ and never reached
+   the ranker; the denser, shorter window concentrates slots on departures the ranking
+   can actually use.
+4. `scoring.rank` departure handling, iterated through three user feedback rounds to
+   its final form: per kind, candidates departing more than
+   `Weights.max_depart_wait_min` (30) after that kind's earliest option never compete
+   (the card must not advertise a sailing half an hour out); within the window every
+   waited minute costs one minute (`depart_delay_factor` 1.0), so the 16 km land loop
+   around the IJ can never beat "wait 10 min for the ferry" — while the card shows
+   the winner's own ride time (e.g. "38 min") with the frontend's "Leave at HH:MM"
+   label carrying the wait. Rejected on the way: strict door-to-door only (hid the
+   attractive low number), pure-fastest (advertised a sailing 31 min out), and a hard
+   15-min window without the factor (ferry headways ~15-20 min left phase-unlucky
+   moments where every sailing fell outside and the absurd land loop won).
 
 Honest remaining gap vs Google on IJ trips: Google assumes the ideal ferry with zero
 wait and an optimistic crossing (F7 headway is ~30 min midday; F4 crossing is a real

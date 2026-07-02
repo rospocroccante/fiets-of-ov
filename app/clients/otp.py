@@ -28,8 +28,8 @@ _GRAPHQL_PATH = "/otp/gtfs/v1"
 
 # Amsterdam-tuned OTP routing parameters (see design doc). All verified present on the
 # running OTP2 GTFS schema.
-_NUM_ITINERARIES = 8
-_SEARCH_WINDOW_S = 5400
+_NUM_ITINERARIES = 12
+_SEARCH_WINDOW_S = 3600
 _WALK_RELUCTANCE = 2.5
 _WALK_SPEED = 1.35
 _BIKE_SPEED = 5.0
