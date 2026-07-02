@@ -89,6 +89,11 @@ class Weights:
     # frontend's "Leave at HH:MM" label makes the wait visible instead of pricing it
     # in. Set to ~1.0 to prefer leave-now options for a strict door-to-door ranking.
     depart_delay_factor: float = 0.0
+    # Only candidates departing within this many minutes of their kind's earliest
+    # departure compete: the fastest trip is worthless if you must loiter half an hour
+    # for it (e.g. a sparse F7 sailing). Per kind, so a mode whose next service is
+    # further out is not wiped from the options.
+    max_depart_wait_min: float = 15.0
 
 
 DEFAULT_WEIGHTS = Weights()
@@ -183,17 +188,25 @@ def rank(
     candidate of that kind is kept. The final winners (one per kind) are then sorted by
     cost, with ties broken by shorter duration, then kind name, for deterministic ordering.
 
-    Departure delay is part of the cost: OTP's search window returns itineraries leaving
-    up to ~90 min apart, and the earliest candidate's start is the "now" reference — every
-    minute a candidate departs after it is added via `weights.depart_delay_factor`.
+    Departure handling: OTP's search window returns itineraries leaving up to ~90 min
+    apart. Within each kind, only candidates departing within `weights.max_depart_wait_min`
+    of that kind's earliest departure compete — the fastest sailing is no use if it leaves
+    in half an hour. Any residual delay can additionally be priced in per minute via
+    `weights.depart_delay_factor` (default 0: shown time stays the ride time).
     """
     if not candidates:
         return []
-    reference_ms = min(c.itinerary.start_time for c in candidates)
+    earliest_ms: dict[OptionKind, int] = {}
+    for candidate in candidates:
+        start = candidate.itinerary.start_time
+        prior = earliest_ms.get(candidate.kind)
+        earliest_ms[candidate.kind] = start if prior is None else min(prior, start)
     best: dict[OptionKind, ScoredCandidate] = {}
     for candidate in candidates:
+        delay_min = (candidate.itinerary.start_time - earliest_ms[candidate.kind]) / 60000
+        if delay_min > weights.max_depart_wait_min:
+            continue
         scored = score(candidate, rain, weights, threshold)
-        delay_min = (candidate.itinerary.start_time - reference_ms) / 60000
         if delay_min:
             scored = replace(
                 scored, cost=round(scored.cost + delay_min * weights.depart_delay_factor, 4)

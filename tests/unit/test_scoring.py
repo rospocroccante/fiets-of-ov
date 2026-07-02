@@ -231,34 +231,42 @@ def test_custom_weights_defaults_match_spec():
     assert w.station_access_bonus_min == 2.0
     assert w.transit_bias_min == 10.0
 
-def test_rank_default_shows_fastest_regardless_of_departure():
-    # Product default: the card shows the fastest trip Google-style; the wait is
-    # surfaced by the frontend's "Leave at" label, not priced into the ranking.
+def test_rank_shows_fastest_within_the_departure_window():
+    # Product default: fastest trip wins, but only among departures within
+    # max_depart_wait_min (15) of the kind's earliest option.
     now_bike = itin(leg("BICYCLE", (14, 0), (14, 38)))
-    later_bike = itin(leg("BICYCLE", (14, 57), (15, 31)))  # 34 min, departs +57
-    ordered = rank([Candidate("bike", later_bike), Candidate("bike", now_bike)], rain=None)
+    soon_bike = itin(leg("BICYCLE", (14, 10), (14, 44)))  # 34 min, departs +10: competes
+    ordered = rank([Candidate("bike", now_bike), Candidate("bike", soon_bike)], rain=None)
     assert len(ordered) == 1  # one winner per kind
-    assert ordered[0].itinerary is later_bike
+    assert ordered[0].itinerary is soon_bike
 
 
-def test_depart_delay_factor_restores_door_to_door_ranking():
-    # With the factor enabled, a 34-min ride leaving in 57 min loses to a 38-min ride
-    # leaving now (57 waited minutes count as trip minutes).
+def test_rank_drops_departures_beyond_the_window():
+    # A faster ride leaving 57 min out is no answer to "how do I go now".
     now_bike = itin(leg("BICYCLE", (14, 0), (14, 38)))
-    later_bike = itin(leg("BICYCLE", (14, 57), (15, 31)))
-    strict = Weights(depart_delay_factor=1.0)
-    ordered = rank(
-        [Candidate("bike", later_bike), Candidate("bike", now_bike)], rain=None, weights=strict
-    )
+    later_bike = itin(leg("BICYCLE", (14, 57), (15, 31)))  # 34 min, departs +57: dropped
+    ordered = rank([Candidate("bike", later_bike), Candidate("bike", now_bike)], rain=None)
     assert ordered[0].itinerary is now_bike
-    # And across kinds: transit leaving 30 min later accrues those minutes.
+
+
+def test_departure_window_is_per_kind():
+    # Transit's next service being 30 min out must not wipe transit from the options:
+    # the window is measured against each kind's own earliest departure.
     late_transit = itin(
         leg("WALK", (14, 30), (14, 32)),
         leg("TRAM", (14, 32), (14, 44), route="13"),
     )
-    scored = rank(
-        [Candidate("bike", BIKE), Candidate("transit", late_transit)], rain=None, weights=strict
+    ordered = rank([Candidate("bike", BIKE), Candidate("transit", late_transit)], rain=None)
+    assert {s.kind for s in ordered} == {"bike", "transit"}
+
+
+def test_depart_delay_factor_prices_waiting_within_the_window():
+    # With the factor enabled, a 34-min ride leaving in 10 min costs 34+10 and loses
+    # to a 38-min ride leaving now.
+    now_bike = itin(leg("BICYCLE", (14, 0), (14, 38)))
+    soon_bike = itin(leg("BICYCLE", (14, 10), (14, 44)))
+    strict = Weights(depart_delay_factor=1.0)
+    ordered = rank(
+        [Candidate("bike", soon_bike), Candidate("bike", now_bike)], rain=None, weights=strict
     )
-    transit_scored = next(s for s in scored if s.kind == "transit")
-    # 12+2=14 min ride + 10 bias + 30 delay = 54
-    assert transit_scored.cost == 54.0
+    assert ordered[0].itinerary is now_bike
