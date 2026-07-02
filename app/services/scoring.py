@@ -84,11 +84,11 @@ class Weights:
     # Flat handicap on non-bike options so bike wins unless transit saves more than this
     # many minutes.
     transit_bias_min: float = 10.0
-    # Cost per minute of departing later than the earliest candidate. For a plan-now
-    # query a minute spent waiting to leave is a minute of trip time, so a shorter
-    # itinerary that departs much later (e.g. a sparse ferry line) must not outrank
-    # one leaving now.
-    depart_delay_factor: float = 1.0
+    # Cost per minute of departing later than the earliest candidate. Product choice
+    # (2026-07-02): default 0 — the card shows the FASTEST trip Google-style, and the
+    # frontend's "Leave at HH:MM" label makes the wait visible instead of pricing it
+    # in. Set to ~1.0 to prefer leave-now options for a strict door-to-door ranking.
+    depart_delay_factor: float = 0.0
 
 
 DEFAULT_WEIGHTS = Weights()
