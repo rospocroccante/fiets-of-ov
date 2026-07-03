@@ -165,6 +165,16 @@ async def test_raises_on_graphql_errors():
 
 
 @respx.mock
+async def test_raises_on_null_plan():
+    # A 200 with {"data": {"plan": null}} (OTP answered but produced no plan object)
+    # must raise OTPError, not slip through as an empty result.
+    respx.post(GQL_URL).mock(return_value=httpx.Response(200, json={"data": {"plan": None}}))
+
+    with pytest.raises(OTPError):
+        await OTPClient(base_url=URL).plan(from_place=FROM, to_place=TO, mode="BICYCLE")
+
+
+@respx.mock
 async def test_raises_on_transport_error():
     respx.post(GQL_URL).mock(side_effect=httpx.ConnectError("boom"))
 

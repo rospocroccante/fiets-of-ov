@@ -261,6 +261,16 @@ def test_departures_beyond_the_cap_never_compete():
     assert ordered[0].itinerary is land_loop
 
 
+def test_departure_at_exactly_the_cap_still_competes():
+    # The cap is exclusive (strict >): a departure exactly max_depart_wait_min out is
+    # still a valid offer. 15-min ride at +30 min costs 15+30=45 and beats the 59-min
+    # land loop leaving now.
+    land_loop = itin(leg("BICYCLE", (14, 0), (14, 59)))
+    cap_ferry = itin(leg("BICYCLE", (14, 30), (14, 45)))
+    ordered = rank([Candidate("bike", cap_ferry), Candidate("bike", land_loop)], rain=None)
+    assert ordered[0].itinerary is cap_ferry
+
+
 def test_leg_spanning_midnight_matches_after_midnight_rain():
     # A ride 23:50 -> 00:10 wraps past midnight: its window has start > end, so a naive
     # start <= slot <= end match finds nothing and scores a wet night ride as dry.
