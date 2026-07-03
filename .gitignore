@@ -23,6 +23,11 @@ htmlcov/
 # Harness / agent artifacts
 .claude/
 
+# SDD process artifacts: session progress ledger and raw benchmark dumps. The curated
+# design docs (docs/superpowers/specs/, docs/superpowers/plans/) stay tracked.
+.superpowers/
+docs/superpowers/evidence/
+
 # Self-host OTP runtime data (jar, OSM, GTFS, built graph) — large, regenerated locally
 /otp/data/
 
