@@ -48,7 +48,14 @@ BIKE_MODES = "BICYCLE,FERRY"
 # `$date`/`$time` are optional plan-from-when strings (local to the OTP graph's tz); when
 # both are null OTP plans from "now", so existing "plan now" callers are unaffected.
 # `$optimize`/`$triangle` are only sent for BICYCLE-containing modes (see plan()).
-_PLAN_QUERY = """
+# The leg-detail selection is a template slot (not .format(): the query itself is full of
+# GraphQL braces) so the snap fallback's slim probes can skip geometry/steps — the bulk
+# of the response payload — when they only need to know whether a bike route exists.
+_LEG_DETAIL_SELECTION = """
+        legGeometry { points }
+        steps { distance relativeDirection streetName }"""
+
+_PLAN_QUERY_TEMPLATE = """
 query Plan(
   $from: InputCoordinates!
   $to: InputCoordinates!
@@ -96,14 +103,15 @@ query Plan(
         route { shortName longName }
         trip { tripHeadsign }
         from { name lat lon }
-        to { name lat lon }
-        legGeometry { points }
-        steps { distance relativeDirection streetName }
+        to { name lat lon }__LEG_DETAIL__
       }
     }
   }
 }
 """
+
+_PLAN_QUERY = _PLAN_QUERY_TEMPLATE.replace("__LEG_DETAIL__", _LEG_DETAIL_SELECTION)
+_SLIM_PLAN_QUERY = _PLAN_QUERY_TEMPLATE.replace("__LEG_DETAIL__", "")
 
 
 class OTPError(Exception):
@@ -220,6 +228,8 @@ class OTPClient:
         to_place: tuple[float, float],
         mode: str,
         departure: datetime | None = None,
+        num_itineraries: int | None = None,
+        slim: bool = False,
     ) -> Plan:
         """Return OTP's itineraries for `from_place` -> `to_place` using `mode`.
 
@@ -230,6 +240,11 @@ class OTPClient:
         it is split into OTP's separate `date`/`time` strings. When omitted, both are sent
         as null so OTP plans from "now" — keeping existing "plan now" callers unchanged.
 
+        `num_itineraries` overrides the Amsterdam-tuned default of 12, and `slim=True`
+        drops the legGeometry/steps selection from the query. Together they make a cheap
+        existence probe for the snap fallback, which fires many speculative queries and
+        only needs to know whether a bike itinerary exists — not what it looks like.
+
         Raises `OTPError` on any failure so the caller never receives a fabricated route.
         """
         is_bike_mode = "BICYCLE" in mode
@@ -237,7 +252,7 @@ class OTPClient:
             "from": {"lat": from_place[0], "lon": from_place[1]},
             "to": {"lat": to_place[0], "lon": to_place[1]},
             "modes": _to_transport_modes(mode),
-            "num": _NUM_ITINERARIES,
+            "num": num_itineraries if num_itineraries is not None else _NUM_ITINERARIES,
             # OTP expects date/time as separate strings; null on both => plan from "now".
             "date": departure.strftime("%Y-%m-%d") if departure is not None else None,
             "time": departure.strftime("%H:%M:%S") if departure is not None else None,
@@ -253,10 +268,11 @@ class OTPClient:
             "optimize": "TRIANGLE" if is_bike_mode else None,
             "triangle": _BIKE_TRIANGLE if is_bike_mode else None,
         }
+        query = _SLIM_PLAN_QUERY if slim else _PLAN_QUERY
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
                 response = await client.post(
-                    self._graphql_url, json={"query": _PLAN_QUERY, "variables": variables}
+                    self._graphql_url, json={"query": query, "variables": variables}
                 )
                 response.raise_for_status()
                 data = response.json()

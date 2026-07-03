@@ -31,6 +31,12 @@ class Settings(BaseSettings):
     # untrusted; we would rather fail fast and degrade than hang a request.
     request_timeout_seconds: float = 10.0
 
+    # Overall deadline for the pedestrian-deck bike-snapping fallback (see
+    # app/services/snap.py). The fallback can fan out up to 24 OTP probe queries; past
+    # this ceiling we accept "no bike option" rather than hold the request hostage to a
+    # slow OTP.
+    snap_timeout_seconds: float = 8.0
+
     # Redis-backed cache for the rain forecast. The cache fails open: if Redis is down
     # the request still runs (just without caching), so this is never a hard dependency.
     redis_url: str = "redis://localhost:6379/0"

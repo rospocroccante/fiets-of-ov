@@ -29,7 +29,9 @@ class FakeOTP:
         self.fail = fail or set()
         self.calls: list[str] = []
 
-    async def plan(self, *, from_place, to_place, mode, departure=None) -> Plan:
+    async def plan(
+        self, *, from_place, to_place, mode, departure=None, num_itineraries=None, slim=False
+    ) -> Plan:
         self.calls.append(mode)
         if mode in self.fail:
             raise OTPError(f"boom {mode}")
@@ -110,7 +112,9 @@ class _DeckOTP:
     def __init__(self):
         self.bike_targets = []
 
-    async def plan(self, *, from_place, to_place, mode, departure=None):
+    async def plan(
+        self, *, from_place, to_place, mode, departure=None, num_itineraries=None, slim=False
+    ):
         if mode == BIKE_MODES:
             self.bike_targets.append((from_place, to_place))
             if from_place == _DECK or to_place == _DECK:

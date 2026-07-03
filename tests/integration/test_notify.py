@@ -140,7 +140,9 @@ class _StubOTP:
         self._raise_for_origin = raise_for_origin
         self.calls: list[tuple[str, object]] = []
 
-    async def plan(self, *, from_place, to_place, mode, departure=None) -> Plan:
+    async def plan(
+        self, *, from_place, to_place, mode, departure=None, num_itineraries=None, slim=False
+    ) -> Plan:
         self.calls.append((mode, departure))
         if mode == "BICYCLE":
             if self._raise_for_origin is not None and from_place == self._raise_for_origin:

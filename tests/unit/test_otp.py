@@ -224,3 +224,33 @@ async def test_bike_triangle_only_for_bike_modes():
     variables = json.loads(route.calls.last.request.content)["variables"]
     assert variables["optimize"] is None
     assert variables["triangle"] is None
+
+
+@respx.mock
+async def test_slim_plan_overrides_num_and_drops_geometry_and_steps():
+    # The snap fallback probes with a slim variant: fewer itineraries and no
+    # legGeometry/steps selection, so 24 probes don't each pay for full geometry.
+    route = respx.post(GQL_URL).mock(return_value=httpx.Response(200, json=BIKE))
+
+    plan = await OTPClient(base_url=URL).plan(
+        from_place=FROM, to_place=TO, mode="BICYCLE", num_itineraries=3, slim=True
+    )
+
+    body = json.loads(route.calls.last.request.content)
+    assert body["variables"]["num"] == 3
+    assert "legGeometry" not in body["query"]
+    assert "steps" not in body["query"]
+    assert plan.itineraries[0].legs[0].mode == "BICYCLE"
+
+
+@respx.mock
+async def test_full_plan_still_selects_geometry_and_steps():
+    # The default (non-slim) query must keep the drawable detail /v1/plan relies on.
+    route = respx.post(GQL_URL).mock(return_value=httpx.Response(200, json=BIKE))
+
+    await OTPClient(base_url=URL).plan(from_place=FROM, to_place=TO, mode="BICYCLE")
+
+    body = json.loads(route.calls.last.request.content)
+    assert body["variables"]["num"] == 12
+    assert "legGeometry" in body["query"]
+    assert "steps" in body["query"]
