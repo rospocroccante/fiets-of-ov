@@ -201,9 +201,7 @@ def test_station_access_bonus_for_bike_and_ride_ending_at_hub():
 
 def test_no_station_bonus_for_plain_bike_or_transit():
     # A plain bike itinerary ending at a hub gets no station-access bonus.
-    bike_to_hub = Candidate(
-        "bike", itin(leg("BICYCLE", (14, 0), (14, 20), to_pt=CENTRAAL))
-    )
+    bike_to_hub = Candidate("bike", itin(leg("BICYCLE", (14, 0), (14, 20), to_pt=CENTRAAL)))
     assert score(bike_to_hub, rain=None).cost == 20.0
     # A transit itinerary is not eligible either.
     transit_at_hub = Candidate("transit", _two_transit(CENTRAAL))
@@ -230,6 +228,7 @@ def test_custom_weights_defaults_match_spec():
     assert w.ferry_bonus_min == 3.0
     assert w.station_access_bonus_min == 2.0
     assert w.transit_bias_min == 10.0
+
 
 def test_waiting_for_a_much_faster_ride_beats_the_land_loop():
     # Direct 59-min loop around the IJ leaving now vs a 38-min ferry ride leaving in

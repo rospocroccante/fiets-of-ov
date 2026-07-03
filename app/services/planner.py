@@ -113,8 +113,7 @@ def _cache_key(
     """
     when = departure.isoformat() if departure is not None else "now"
     return (
-        f"plan:{from_place[0]:.4f},{from_place[1]:.4f}"
-        f"->{to_place[0]:.4f},{to_place[1]:.4f}@{when}"
+        f"plan:{from_place[0]:.4f},{from_place[1]:.4f}->{to_place[0]:.4f},{to_place[1]:.4f}@{when}"
     )
 
 

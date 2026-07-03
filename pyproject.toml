@@ -25,7 +25,9 @@ dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
     "respx>=0.21",
-    "ruff>=0.7",
+    # Pinned exactly: formatting output changes between ruff releases, so CI's
+    # `ruff format --check` must run the same version as the local venv.
+    "ruff==0.15.20",
 ]
 
 [build-system]

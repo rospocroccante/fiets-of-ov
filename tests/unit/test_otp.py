@@ -211,9 +211,7 @@ async def test_bike_triangle_only_for_bike_modes():
     assert variables["triangle"] == {"safetyFactor": 0.3, "slopeFactor": 0.0, "timeFactor": 0.7}
 
     # BICYCLE,TRANSIT,WALK mode: triangle must be present
-    await OTPClient(base_url=URL).plan(
-        from_place=FROM, to_place=TO, mode="BICYCLE,TRANSIT,WALK"
-    )
+    await OTPClient(base_url=URL).plan(from_place=FROM, to_place=TO, mode="BICYCLE,TRANSIT,WALK")
     variables = json.loads(route.calls.last.request.content)["variables"]
     assert variables["optimize"] == "TRIANGLE"
     assert variables["triangle"] == {"safetyFactor": 0.3, "slopeFactor": 0.0, "timeFactor": 0.7}

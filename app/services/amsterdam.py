@@ -43,8 +43,7 @@ def is_near_hub(lat: float | None, lon: float | None) -> bool:
     if lat is None or lon is None:
         return False
     return any(
-        haversine_m(lat, lon, h_lat, h_lon) <= HUB_RADIUS_M
-        for _, h_lat, h_lon in MAJOR_HUBS
+        haversine_m(lat, lon, h_lat, h_lon) <= HUB_RADIUS_M for _, h_lat, h_lon in MAJOR_HUBS
     )
 
 

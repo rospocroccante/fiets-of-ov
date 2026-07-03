@@ -266,9 +266,7 @@ async def run_due_checks(
                 # One bad alert must not starve the rest of the tick. process_trip_alert
                 # already rolls back its own aborted DB transaction; log and carry on so
                 # the remaining due alerts are still processed.
-                logger.warning(
-                    "failed to process trip_alert %s; skipping", alert.id, exc_info=True
-                )
+                logger.warning("failed to process trip_alert %s; skipping", alert.id, exc_info=True)
                 return None
 
     results = await asyncio.gather(*(_process(alert) for alert in alerts))
