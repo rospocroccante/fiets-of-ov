@@ -22,6 +22,8 @@ from app.clients.buienradar import RainForecast
 from app.clients.otp import Itinerary, Leg
 from app.services import amsterdam
 
+# Amsterdam-only service: the local timezone is a domain constant, not config. Owned
+# here and imported by app/services/advice.py so both modules read the same clock.
 LOCAL_TZ = ZoneInfo("Europe/Amsterdam")
 DEFAULT_RAIN_THRESHOLD_MM_H = 0.1
 
@@ -109,7 +111,12 @@ class ScoredCandidate:
     rain_minutes: int
 
 
-def _local_time(epoch_ms: int) -> time:
+def local_time(epoch_ms: int) -> time:
+    """Convert an OTP epoch-ms timestamp to Amsterdam wall-clock time-of-day.
+
+    Public (like `in_time_window`) because advice.py matches forecast slots against
+    itinerary windows with the same conversion.
+    """
     return datetime.fromtimestamp(epoch_ms / 1000, tz=LOCAL_TZ).time()
 
 
@@ -135,8 +142,8 @@ def _rain_penalty(peak_mm_h: float, weights: Weights) -> float:
 
 def _leg_rain(leg: Leg, rain: RainForecast, threshold: float) -> tuple[float, float]:
     """Return (exposed_minutes_in_rain, peak_mm_h) for an exposed leg over its window."""
-    start = _local_time(leg.start_time)
-    end = _local_time(leg.end_time)
+    start = local_time(leg.start_time)
+    end = local_time(leg.end_time)
     wet = [s for s in rain.slots if in_time_window(s.time, start, end) and s.mm_per_h >= threshold]
     if not wet:
         return 0.0, 0.0

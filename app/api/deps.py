@@ -3,22 +3,28 @@
 Routing client construction through dependencies (rather than instantiating clients
 inline in the endpoint) lets tests swap in clients pointed at fake hosts via
 `app.dependency_overrides`, keeping endpoint tests hermetic and offline.
+
+Also home to `resolve_place_http`, the router-shared wrapper that maps the place
+service's domain errors onto HTTP status codes — the services layer stays
+HTTP-agnostic (see app/services/places.py), so the mapping lives here in the API layer.
 """
 
 from functools import lru_cache
 
+import httpx
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.clients.buienradar import BuienradarClient
-from app.clients.geocoder import GeocoderClient
+from app.clients.geocoder import GeocodeNotFound, GeocoderClient
 from app.clients.otp import OTPClient
 from app.core.cache import Cache, RedisCache
 from app.core.config import get_settings
 from app.core.security import TokenError, decode_token
 from app.db.session import get_session
 from app.models.user import User
+from app.services.places import resolve_place
 from app.services.rain import RainService
 
 # OAuth2 password-bearer scheme. `tokenUrl` points at our token endpoint so the OpenAPI
@@ -70,6 +76,29 @@ def get_rain_service() -> RainService:
         fresh_seconds=settings.rain_cache_fresh_seconds,
         retention_seconds=settings.rain_cache_retention_seconds,
     )
+
+
+async def resolve_place_http(value: str, geocoder: GeocoderClient) -> tuple[float, float]:
+    """Resolve a `from`/`to` value to `(lat, lon)`, mapping domain errors to HTTP.
+
+    Delegates the parse-or-geocode decision to `resolve_place` (deliberately
+    HTTP-agnostic); this wrapper owns the one status mapping every router shares: an
+    unresolvable name is the caller's mistake (400), a geocoder outage is an upstream
+    failure (502). Shared by /v1/advice, /v1/plan and /v1/trip-alerts so the three
+    endpoints cannot drift apart in how they report geocoding failures.
+    """
+    try:
+        return await resolve_place(value, geocoder)
+    except GeocodeNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"could not find a place named {value!r}",
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="geocoding upstream unavailable",
+        ) from exc
 
 
 async def get_current_user(

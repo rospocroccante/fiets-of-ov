@@ -1,40 +1,22 @@
 """`GET /v1/plan` — the rich, drawable counterpart to `/v1/advice`.
 
-Same wiring as the advice endpoint (OTP + Buienradar mocked with respx, clients swapped via
-dependency overrides), but the leg fixtures carry the extra detail `/v1/plan` exposes --
-`from`/`to` places, `legGeometry`, route long name, headsign -- so the test asserts the full
-drawable shape, not just the recommendation.
+Same wiring as the advice endpoint (shared harness in tests/unit/conftest.py: OTP +
+Buienradar mocked with respx, clients swapped via dependency overrides), but the leg
+fixtures carry the extra detail `/v1/plan` exposes -- `from`/`to` places, `legGeometry`,
+route long name, headsign -- so the test asserts the full drawable shape, not just the
+recommendation.
 """
-
-import json
-from datetime import datetime
-from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
 import respx
 from fastapi.testclient import TestClient
 
-from app.api.deps import get_cache, get_geocoder_client, get_otp_client, get_rain_service
-from app.clients.buienradar import BuienradarClient
-from app.clients.geocoder import GeocodeNotFound
-from app.clients.otp import BIKE_MODES, OTPClient
-from app.core.cache import InMemoryCache
+from app.clients.otp import BIKE_MODES
 from app.main import app
-from app.services.rain import RainService
+from tests.unit.conftest import GQL_URL, RAIN_DRY, RAIN_URL, RAIN_WET, _gql, _otp_by_modes, ms
 
-TZ = ZoneInfo("Europe/Amsterdam")
-OTP_URL = "http://otp.test"
-GQL_URL = f"{OTP_URL}/otp/gtfs/v1"
-RAIN_URL = "https://rain.test/raintext"
-
-
-def ms(hour: int, minute: int) -> int:
-    return int(datetime(2026, 6, 1, hour, minute, tzinfo=TZ).timestamp() * 1000)
-
-
-def _gql(itineraries: list[dict]) -> dict:
-    return {"data": {"plan": {"itineraries": itineraries}}}
+pytestmark = pytest.mark.usefixtures("_override_clients")
 
 
 BIKE_JSON = _gql(
@@ -132,52 +114,6 @@ _BIKE_RIDE_ITIN = {
 }
 
 MIXED_JSON = _gql([_BIKE_RIDE_ITIN])
-
-RAIN_WET = "000|14:00\n109|14:05\n000|14:10\n000|14:20\n"
-RAIN_DRY = "000|14:00\n000|14:05\n000|14:20\n"
-
-
-class _FakeGeocoder:
-    _PLACES = {"amsterdam centraal": (52.3791, 4.9003), "vondelpark": (52.3579, 4.8686)}
-
-    async def geocode(self, query: str) -> tuple[float, float]:
-        key = query.strip().lower()
-        if key not in self._PLACES:
-            raise GeocodeNotFound(query)
-        return self._PLACES[key]
-
-
-def _rain_service() -> RainService:
-    return RainService(
-        BuienradarClient(base_url=RAIN_URL),
-        InMemoryCache(),
-        fresh_seconds=300,
-        retention_seconds=7200,
-    )
-
-
-@pytest.fixture(autouse=True)
-def _override_clients():
-    # A fresh in-memory plan cache per test: many tests reuse identical coordinates with
-    # different OTP mocks, so hitting a real local Redis would leak plans across tests.
-    plan_cache = InMemoryCache()
-    app.dependency_overrides[get_otp_client] = lambda: OTPClient(base_url=OTP_URL)
-    app.dependency_overrides[get_rain_service] = _rain_service
-    app.dependency_overrides[get_geocoder_client] = _FakeGeocoder
-    app.dependency_overrides[get_cache] = lambda: plan_cache
-    yield
-    app.dependency_overrides.clear()
-
-
-def _otp_by_modes(by_key: dict[str, httpx.Response]):
-    """respx side_effect answering by the full requested mode set (comma-joined)."""
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        modes = json.loads(request.content)["variables"]["modes"]
-        key = ",".join(m["mode"] for m in modes)
-        return by_key.get(key, httpx.Response(200, json=_gql([])))
-
-    return handler
 
 
 @respx.mock

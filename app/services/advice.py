@@ -21,27 +21,21 @@ an explicit departure time.
 """
 
 from dataclasses import dataclass
-from datetime import datetime, time
-from zoneinfo import ZoneInfo
 
 from app.clients.buienradar import RainForecast
 from app.clients.otp import Itinerary
+
+# The Amsterdam timezone and the time helpers are owned by scoring.py: both modules
+# match forecast slots to itinerary windows, so they must convert timestamps identically.
 from app.services.scoring import (
     DEFAULT_RAIN_THRESHOLD_MM_H,
     Candidate,
     OptionKind,
     ScoredCandidate,
     in_time_window,
+    local_time,
     rank,
 )
-
-# Amsterdam-only service: the local timezone is a domain constant, not config.
-LOCAL_TZ = ZoneInfo("Europe/Amsterdam")
-
-
-def _local_time(epoch_ms: int) -> time:
-    """Convert an OTP epoch-ms timestamp to Amsterdam wall-clock time-of-day."""
-    return datetime.fromtimestamp(epoch_ms / 1000, tz=LOCAL_TZ).time()
 
 
 def _minutes(seconds: float) -> int:
@@ -75,8 +69,8 @@ def _rain_summary(
     # Window spans the whole bike itinerary, including any sheltered FERRY minutes;
     # intentionally coarse for this banner — cost math (scoring.py) handles exposure
     # per leg.
-    start = _local_time(itinerary.start_time)
-    end = _local_time(itinerary.end_time)
+    start = local_time(itinerary.start_time)
+    end = local_time(itinerary.end_time)
     # in_time_window wraps past midnight, so a 23:50 -> 00:10 ride still sees its slots.
     window = [s for s in rain.slots if in_time_window(s.time, start, end)]
     peak = round(max((s.mm_per_h for s in window), default=0.0), 4)

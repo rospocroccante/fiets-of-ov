@@ -11,41 +11,18 @@ ever sees or removes their own trip alerts, so the list filters by `user_id` and
 never reveal that another user's trip alert exists).
 """
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException, Path, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user, get_geocoder_client
-from app.clients.geocoder import GeocodeNotFound, GeocoderClient
+from app.api.deps import get_current_user, get_geocoder_client, resolve_place_http
+from app.clients.geocoder import GeocoderClient
 from app.db.session import get_session
 from app.models.trip_alert import TripAlert
 from app.models.user import User
 from app.schemas.trip_alert import TripAlertCreate, TripAlertOut
-from app.services.places import resolve_place
 
 router = APIRouter(prefix="/v1/trip-alerts", tags=["trip-alerts"])
-
-
-async def _resolve_place(value: str, geocoder: GeocoderClient) -> tuple[float, float]:
-    """Resolve an origin/destination value to `(lat, lon)`, mapping domain errors to HTTP.
-
-    Shares the parse-or-geocode logic with `/v1/advice` via `resolve_place`; this wrapper
-    only translates the domain errors into status codes: an unresolvable name is the
-    caller's mistake (400), a geocoder outage is an upstream failure (502).
-    """
-    try:
-        return await resolve_place(value, geocoder)
-    except GeocodeNotFound as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"could not find a place named {value!r}",
-        ) from exc
-    except httpx.HTTPError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="geocoding upstream unavailable",
-        ) from exc
 
 
 @router.post("", response_model=TripAlertOut, status_code=status.HTTP_201_CREATED)
@@ -62,8 +39,8 @@ async def create_trip_alert(
     geocode again. The row is owned by the authenticated user — `user_id` is taken from the
     token, never from the body, so a client can't create trip alerts for someone else.
     """
-    origin_lat, origin_lon = await _resolve_place(body.origin, geocoder)
-    dest_lat, dest_lon = await _resolve_place(body.destination, geocoder)
+    origin_lat, origin_lon = await resolve_place_http(body.origin, geocoder)
+    dest_lat, dest_lon = await resolve_place_http(body.destination, geocoder)
 
     trip_alert = TripAlert(
         user_id=user.id,

@@ -8,32 +8,24 @@ lists directions from this one response, so it never has to talk to OTP itself.
 
 import asyncio
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.api.deps import get_cache, get_geocoder_client, get_otp_client, get_rain_service
-from app.clients.geocoder import GeocodeNotFound, GeocoderClient
+from app.api.deps import (
+    get_cache,
+    get_geocoder_client,
+    get_otp_client,
+    get_rain_service,
+    resolve_place_http,
+)
+from app.clients.geocoder import GeocoderClient
 from app.clients.otp import Itinerary, Leg, OTPClient, OTPError
 from app.core.cache import Cache
 from app.schemas.plan import ItineraryOut, LegOut, OptionOut, PlaceOut, PlanResponse, StepOut
 from app.services.advice import recommend
-from app.services.places import resolve_place
 from app.services.planner import gather_candidates_cached
 from app.services.rain import RainService
 
 router = APIRouter()
-
-
-async def _resolve_place(value: str, geocoder: GeocoderClient) -> tuple[float, float]:
-    """Resolve a `from`/`to` value to `(lat, lon)`, mapping domain errors to HTTP."""
-    try:
-        return await resolve_place(value, geocoder)
-    except GeocodeNotFound as exc:
-        raise HTTPException(
-            status_code=400, detail=f"could not find a place named {value!r}"
-        ) from exc
-    except httpx.HTTPError as exc:
-        raise HTTPException(status_code=502, detail="geocoding upstream unavailable") from exc
 
 
 def _minutes(seconds: float) -> int:
@@ -85,10 +77,10 @@ async def get_plan(
 ) -> PlanResponse:
     """Return the rain-aware recommendation plus all ranked, drawable options."""
     # The two geocodes are independent, so resolve them concurrently. The first failure
-    # propagates with its existing status mapping (400/502 from _resolve_place); gather
-    # retrieves the sibling's outcome internally, so nothing is left unawaited.
+    # propagates with its existing status mapping (400/502 from resolve_place_http);
+    # gather retrieves the sibling's outcome internally, so nothing is left unawaited.
     from_place, to_place = await asyncio.gather(
-        _resolve_place(origin, geocoder), _resolve_place(destination, geocoder)
+        resolve_place_http(origin, geocoder), resolve_place_http(destination, geocoder)
     )
 
     try:

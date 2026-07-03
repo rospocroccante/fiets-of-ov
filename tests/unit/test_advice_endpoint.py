@@ -1,41 +1,23 @@
 """`GET /v1/advice` — wiring the clients to the engine over HTTP.
 
 Both upstreams are mocked with respx: OTP's GTFS GraphQL `plan` (POSTed once per mode
-set, answered by the full requested mode list) and Buienradar's raintext. The clients are
-swapped via FastAPI dependency overrides so the test points them at fake hosts. The bike
-itinerary's epoch-ms times are anchored to the same fixed June day as the rain slots so
-the engine sees them as aligned.
+set, answered by the full requested mode list) and Buienradar's raintext. The shared
+harness — URL constants, payload helpers, fake clients and the dependency-override
+fixture — lives in tests/unit/conftest.py; this module keeps only the advice-shaped OTP
+payloads (summary legs, no geometry) and the assertions.
 """
-
-import json
-from datetime import datetime
-from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
 import respx
 from fastapi.testclient import TestClient
 
-from app.api.deps import get_cache, get_geocoder_client, get_otp_client, get_rain_service
-from app.clients.buienradar import BuienradarClient
-from app.clients.geocoder import GeocodeNotFound
-from app.clients.otp import BIKE_MODES, OTPClient
-from app.core.cache import InMemoryCache
+from app.api.deps import get_geocoder_client
+from app.clients.otp import BIKE_MODES
 from app.main import app
-from app.services.rain import RainService
+from tests.unit.conftest import GQL_URL, RAIN_DRY, RAIN_URL, RAIN_WET, _gql, _otp_by_modes, ms
 
-TZ = ZoneInfo("Europe/Amsterdam")
-OTP_URL = "http://otp.test"  # host root; client appends /otp/gtfs/v1
-GQL_URL = f"{OTP_URL}/otp/gtfs/v1"
-RAIN_URL = "https://rain.test/raintext"
-
-
-def ms(hour: int, minute: int) -> int:
-    return int(datetime(2026, 6, 1, hour, minute, tzinfo=TZ).timestamp() * 1000)
-
-
-def _gql(itineraries: list[dict]) -> dict:
-    return {"data": {"plan": {"itineraries": itineraries}}}
+pytestmark = pytest.mark.usefixtures("_override_clients")
 
 
 BIKE_JSON = _gql(
@@ -130,57 +112,6 @@ MIXED_JSON = _gql([_BIKE_RIDE_ITIN])
 
 # OTP often orders a long WALK-only itinerary first; the real tram option comes second.
 TRANSIT_JSON_WALK_FIRST = _gql([_WALK_ONLY_ITIN, _TRANSIT_ITIN])
-
-# 109|14:05 -> 1.0 mm/h (wet); everything else dry.
-RAIN_WET = "000|14:00\n109|14:05\n000|14:10\n000|14:20\n"
-RAIN_DRY = "000|14:00\n000|14:05\n000|14:20\n"
-
-
-class _FakeGeocoder:
-    """Stand-in geocoder: resolves a couple of known names, raises otherwise."""
-
-    _PLACES = {"amsterdam centraal": (52.3791, 4.9003), "vondelpark": (52.3579, 4.8686)}
-
-    async def geocode(self, query: str) -> tuple[float, float]:
-        key = query.strip().lower()
-        if key not in self._PLACES:
-            raise GeocodeNotFound(query)
-        return self._PLACES[key]
-
-
-def _rain_service() -> RainService:
-    # Real rain service over a fresh in-memory cache, pointed at the mocked Buienradar.
-    # Exercises the actual caching + degradation path instead of stubbing it out.
-    return RainService(
-        BuienradarClient(base_url=RAIN_URL),
-        InMemoryCache(),
-        fresh_seconds=300,
-        retention_seconds=7200,
-    )
-
-
-@pytest.fixture(autouse=True)
-def _override_clients():
-    # A fresh in-memory plan cache per test: many tests reuse identical coordinates with
-    # different OTP mocks, so hitting a real local Redis would leak plans across tests.
-    plan_cache = InMemoryCache()
-    app.dependency_overrides[get_otp_client] = lambda: OTPClient(base_url=OTP_URL)
-    app.dependency_overrides[get_rain_service] = _rain_service
-    app.dependency_overrides[get_geocoder_client] = _FakeGeocoder
-    app.dependency_overrides[get_cache] = lambda: plan_cache
-    yield
-    app.dependency_overrides.clear()
-
-
-def _otp_by_modes(by_key: dict[str, httpx.Response]):
-    """respx side_effect answering by the full requested mode set (comma-joined)."""
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        modes = json.loads(request.content)["variables"]["modes"]
-        key = ",".join(m["mode"] for m in modes)
-        return by_key.get(key, httpx.Response(200, json=_gql([])))
-
-    return handler
 
 
 @respx.mock
