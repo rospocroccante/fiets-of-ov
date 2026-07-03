@@ -12,16 +12,21 @@ from fastapi.middleware.gzip import GZipMiddleware
 
 from app.api import advice, auth, health, plan, stops, trip_alerts
 from app.api.deps import get_buienradar_client, get_geocoder_client, get_otp_client
+from app.core.logging import configure_logging
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Close the shared HTTP clients on shutdown so pooled connections exit cleanly.
+    """Configure logging on startup; close the shared HTTP clients on shutdown.
 
-    Nothing starts eagerly: the client singletons build their AsyncClient lazily on
-    first use, and `aclose()` on a never-used client is a no-op, so calling the
+    `configure_logging` is a guarded basicConfig, so under uvicorn's own log config
+    it is a no-op — it only matters when nothing else set up the root logger.
+
+    Nothing else starts eagerly: the client singletons build their AsyncClient lazily
+    on first use, and `aclose()` on a never-used client is a no-op, so calling the
     providers here is safe whether or not the process ever served a request.
     """
+    configure_logging()
     yield
     await get_otp_client().aclose()
     await get_buienradar_client().aclose()

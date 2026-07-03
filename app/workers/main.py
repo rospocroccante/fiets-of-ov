@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.api.deps import get_buienradar_client, get_otp_client, get_rain_service
 from app.core.config import get_settings
+from app.core.logging import configure_logging
 from app.db.session import get_engine
 from app.services.notifier import LogNotifier
 from app.services.notify import run_due_checks
@@ -67,6 +68,17 @@ async def check_trip_alerts(ctx: dict[str, Any]) -> None:
         )
 
 
+async def startup(ctx: dict[str, Any]) -> None:
+    """ARQ startup hook: make the app's own loggers visible.
+
+    arq only configures its `arq.*` loggers, so without this the worker process has no
+    root handler and every `app.*` log line is dropped — including LogNotifier's rain
+    alerts, which are the MVP's entire delivery channel. `configure_logging` is a
+    guarded basicConfig, so a deployment that pre-configures logging is left alone.
+    """
+    configure_logging()
+
+
 async def shutdown(ctx: dict[str, Any]) -> None:
     """ARQ shutdown hook: close the shared HTTP clients' pooled connections.
 
@@ -91,4 +103,5 @@ class WorkerSettings:
     redis_settings = RedisSettings.from_dsn(get_settings().redis_url)
     # Fire on minutes 0,5,10,…,55 — i.e. every 5 minutes, aligned to the wall clock.
     cron_jobs = [cron(check_trip_alerts, minute=set(range(0, 60, 5)))]
+    on_startup = startup
     on_shutdown = shutdown

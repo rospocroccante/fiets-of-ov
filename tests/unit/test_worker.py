@@ -26,6 +26,16 @@ def test_check_trip_alerts_is_a_coroutine_function() -> None:
     assert inspect.iscoroutinefunction(check_trip_alerts)
 
 
+def test_worker_wires_startup_hook() -> None:
+    """on_startup is an awaitable hook.
+
+    It exists to configure logging: arq only sets up its own `arq.*` loggers, so without
+    the hook the LogNotifier's alert lines — the MVP delivery channel — would be dropped.
+    The hook's behaviour is covered in test_logging_config.py; here we assert the wiring.
+    """
+    assert inspect.iscoroutinefunction(WorkerSettings.on_startup)
+
+
 def test_cron_fires_once_every_five_minutes() -> None:
     """The cron runs on minutes 0,5,…,55 at second 0 — once per 5 min, not 60x/minute.
 
