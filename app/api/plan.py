@@ -6,6 +6,8 @@ public transport — each with per-leg geometry and detail. The client draws the
 lists directions from this one response, so it never has to talk to OTP itself.
 """
 
+import asyncio
+
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -80,17 +82,26 @@ async def get_plan(
     geocoder: GeocoderClient = Depends(get_geocoder_client),
 ) -> PlanResponse:
     """Return the rain-aware recommendation plus all ranked, drawable options."""
-    from_place = await _resolve_place(origin, geocoder)
-    to_place = await _resolve_place(destination, geocoder)
+    # The two geocodes are independent, so resolve them concurrently. The first failure
+    # propagates with its existing status mapping (400/502 from _resolve_place); gather
+    # retrieves the sibling's outcome internally, so nothing is left unawaited.
+    from_place, to_place = await asyncio.gather(
+        _resolve_place(origin, geocoder), _resolve_place(destination, geocoder)
+    )
 
     try:
-        candidates = await gather_candidates(otp, from_place, to_place)
+        # Routing and the rain forecast only share the origin, so they run concurrently.
+        # get_forecast degrades to None instead of raising, so the only exception here
+        # is OTPError — mapped to the same 502 as before.
+        candidates, rain = await asyncio.gather(
+            gather_candidates(otp, from_place, to_place),
+            rain_service.get_forecast(lat=from_place[0], lon=from_place[1]),
+        )
     except OTPError as exc:
         raise HTTPException(status_code=502, detail="routing upstream unavailable") from exc
     if not candidates:
         raise HTTPException(status_code=502, detail="no route found for this trip")
 
-    rain = await rain_service.get_forecast(lat=from_place[0], lon=from_place[1])
     plan = recommend(candidates, rain)
 
     return PlanResponse(
