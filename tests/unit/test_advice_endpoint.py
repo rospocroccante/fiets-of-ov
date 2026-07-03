@@ -16,7 +16,7 @@ import pytest
 import respx
 from fastapi.testclient import TestClient
 
-from app.api.deps import get_geocoder_client, get_otp_client, get_rain_service
+from app.api.deps import get_cache, get_geocoder_client, get_otp_client, get_rain_service
 from app.clients.buienradar import BuienradarClient
 from app.clients.geocoder import GeocodeNotFound
 from app.clients.otp import BIKE_MODES, OTPClient
@@ -161,9 +161,13 @@ def _rain_service() -> RainService:
 
 @pytest.fixture(autouse=True)
 def _override_clients():
+    # A fresh in-memory plan cache per test: many tests reuse identical coordinates with
+    # different OTP mocks, so hitting a real local Redis would leak plans across tests.
+    plan_cache = InMemoryCache()
     app.dependency_overrides[get_otp_client] = lambda: OTPClient(base_url=OTP_URL)
     app.dependency_overrides[get_rain_service] = _rain_service
     app.dependency_overrides[get_geocoder_client] = _FakeGeocoder
+    app.dependency_overrides[get_cache] = lambda: plan_cache
     yield
     app.dependency_overrides.clear()
 

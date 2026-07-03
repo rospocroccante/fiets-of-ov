@@ -11,13 +11,14 @@ import asyncio
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.api.deps import get_geocoder_client, get_otp_client, get_rain_service
+from app.api.deps import get_cache, get_geocoder_client, get_otp_client, get_rain_service
 from app.clients.geocoder import GeocodeNotFound, GeocoderClient
 from app.clients.otp import Itinerary, Leg, OTPClient, OTPError
+from app.core.cache import Cache
 from app.schemas.plan import ItineraryOut, LegOut, OptionOut, PlaceOut, PlanResponse, StepOut
 from app.services.advice import recommend
 from app.services.places import resolve_place
-from app.services.planner import gather_candidates
+from app.services.planner import gather_candidates_cached
 from app.services.rain import RainService
 
 router = APIRouter()
@@ -80,6 +81,7 @@ async def get_plan(
     otp: OTPClient = Depends(get_otp_client),
     rain_service: RainService = Depends(get_rain_service),
     geocoder: GeocoderClient = Depends(get_geocoder_client),
+    cache: Cache = Depends(get_cache),
 ) -> PlanResponse:
     """Return the rain-aware recommendation plus all ranked, drawable options."""
     # The two geocodes are independent, so resolve them concurrently. The first failure
@@ -94,7 +96,7 @@ async def get_plan(
         # get_forecast degrades to None instead of raising, so the only exception here
         # is OTPError — mapped to the same 502 as before.
         candidates, rain = await asyncio.gather(
-            gather_candidates(otp, from_place, to_place),
+            gather_candidates_cached(otp, cache, from_place, to_place),
             rain_service.get_forecast(lat=from_place[0], lon=from_place[1]),
         )
     except OTPError as exc:

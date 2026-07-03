@@ -1,7 +1,8 @@
 import pytest
 
 from app.clients.otp import BIKE_MODES, Itinerary, Leg, OTPError, Plan
-from app.services.planner import gather_candidates
+from app.core.cache import InMemoryCache
+from app.services.planner import gather_candidates, gather_candidates_cached
 
 
 def leg(mode: str, route: str | None = None) -> Leg:
@@ -140,3 +141,59 @@ async def test_no_snap_when_direct_bike_exists():
     await gather_candidates(otp, _ORIGIN, good_dest)
     # No snapping ring probes: the only bike+ferry call is the single fan-out query.
     assert otp.bike_targets == [(_ORIGIN, good_dest)]
+
+
+# --- short-TTL routing cache ---
+
+
+def _bike_only_otp() -> FakeOTP:
+    return FakeOTP({BIKE_MODES: Plan(itineraries=[itin(leg("BICYCLE"), duration=1200.0)])})
+
+
+async def test_cached_second_call_skips_otp():
+    otp = _bike_only_otp()
+    cache = InMemoryCache()
+
+    first = await gather_candidates_cached(otp, cache, (52.37, 4.89), (52.35, 4.86))
+    calls_after_first = len(otp.calls)
+    second = await gather_candidates_cached(otp, cache, (52.37, 4.89), (52.35, 4.86))
+
+    assert len(otp.calls) == calls_after_first  # served from cache: no new OTP queries
+    assert [c.kind for c in second] == [c.kind for c in first] == ["bike"]
+    assert second[0].itinerary.duration == first[0].itinerary.duration
+
+
+async def test_cache_key_rounds_coordinates_to_four_decimals():
+    otp = _bike_only_otp()
+    cache = InMemoryCache()
+
+    await gather_candidates_cached(otp, cache, (52.37, 4.89), (52.35, 4.86))
+    calls = len(otp.calls)
+    # ~4 cm away: rounds onto the same 4-decimal key, so the cached plan is reused.
+    await gather_candidates_cached(otp, cache, (52.370004, 4.890004), (52.35, 4.86))
+
+    assert len(otp.calls) == calls
+
+
+async def test_empty_results_are_not_cached():
+    otp = FakeOTP({})  # nothing routes anywhere
+    cache = InMemoryCache()
+
+    assert await gather_candidates_cached(otp, cache, (52.37, 4.89), (52.35, 4.86)) == []
+    calls = len(otp.calls)
+    await gather_candidates_cached(otp, cache, (52.37, 4.89), (52.35, 4.86))
+
+    assert len(otp.calls) > calls  # a no-route answer is retried, never pinned for the TTL
+
+
+async def test_plan_cache_fails_open():
+    class _BrokenCache:
+        async def get(self, key: str) -> str | None:
+            raise RuntimeError("redis down")
+
+        async def set(self, key: str, value: str, ttl_seconds: int) -> None:
+            raise RuntimeError("redis down")
+
+    otp = _bike_only_otp()
+    candidates = await gather_candidates_cached(otp, _BrokenCache(), (52.37, 4.89), (52.35, 4.86))
+    assert [c.kind for c in candidates] == ["bike"]
