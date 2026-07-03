@@ -21,7 +21,9 @@ is passed in as an AMS-aware datetime so the worker's clock is injectable and te
 deterministic.
 """
 
+import asyncio
 import logging
+from contextlib import nullcontext
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -122,7 +124,13 @@ async def evaluate_trip_alert(
 
 
 async def process_trip_alert(
-    session: AsyncSession, alert: TripAlert, now: datetime, otp, rain_service, notifier
+    session: AsyncSession,
+    alert: TripAlert,
+    now: datetime,
+    otp,
+    rain_service,
+    notifier,
+    db_lock: asyncio.Lock | None = None,
 ) -> Notification | None:
     """Evaluate `alert` and, only if rain is expected on the bike leg, record + deliver one alert.
 
@@ -150,6 +158,9 @@ async def process_trip_alert(
         otp: OTP client (see `evaluate_trip_alert`).
         rain_service: rain service (see `evaluate_trip_alert`).
         notifier: delivery channel with `async send(notification)`.
+        db_lock: serializes the DB work when the sweep runs alerts concurrently — the
+            shared `AsyncSession` must never execute two statements at once. None (the
+            serial callers) skips locking entirely.
 
     Returns:
         The created `Notification` when an alert was sent, else None (dry, unassessable, or
@@ -161,8 +172,9 @@ async def process_trip_alert(
 
     departure_date = now.date()
     # on_conflict_do_nothing makes the unique (trip_alert_id, departure_date) constraint the
-    # idempotency guard; .returning(id) is non-empty only when this insert actually wrote a
-    # row, which is exactly "we are the tick that gets to notify".
+    # idempotency guard; .returning(Notification) hands back the full inserted row in the
+    # same round trip (no follow-up SELECT) and is non-empty only when this insert actually
+    # wrote a row, which is exactly "we are the tick that gets to notify".
     stmt = (
         insert(Notification)
         .values(
@@ -173,23 +185,26 @@ async def process_trip_alert(
             departure_date=departure_date,
         )
         .on_conflict_do_nothing(index_elements=["trip_alert_id", "departure_date"])
-        .returning(Notification.id)
+        .returning(Notification)
     )
-    try:
-        result = await session.execute(stmt)
-        inserted_id = result.scalar_one_or_none()
-        await session.commit()
-    except Exception:
-        # A failed execute/commit leaves asyncpg's transaction aborted; roll it back so the
-        # session is usable for the next alert, then let the caller isolate this one.
-        await session.rollback()
-        raise
+    # Everything that touches the session (execute/commit/rollback) sits inside the lock;
+    # the slow network evaluation above deliberately does not, so concurrent alerts still
+    # overlap where it matters.
+    async with db_lock if db_lock is not None else nullcontext():
+        try:
+            result = await session.execute(stmt)
+            notification = result.scalars().one_or_none()
+            await session.commit()
+        except Exception:
+            # A failed execute/commit leaves asyncpg's transaction aborted; roll it back so
+            # the session is usable for the next alert, then let the caller isolate this one.
+            await session.rollback()
+            raise
 
-    if inserted_id is None:
+    if notification is None:
         # Conflict: another tick already recorded this trip's alert for today. Don't re-send.
         return None
 
-    notification = await session.get(Notification, inserted_id)
     try:
         await notifier.send(notification)
     except Exception:
@@ -212,6 +227,13 @@ async def run_due_checks(
     collects the alerts that resulted in a fresh, delivered notification (skipping dry trips,
     unassessable ones, and trips already notified for this departure day).
 
+    Alerts are processed with bounded concurrency: an alert's cost is dominated by its
+    OTP + rain fan-out, so overlapping up to 4 keeps a large sweep inside one scheduler
+    tick while the semaphore stops a burst of due alerts from stampeding OTP. The shared
+    `AsyncSession` cannot run overlapping statements, so all DB work stays serialized
+    behind one lock (see `process_trip_alert`). Per-alert error isolation is unchanged:
+    one bad alert is logged and skipped, never aborting the rest of the tick.
+
     Args:
         session: the async DB session.
         now: the current moment, Amsterdam-aware.
@@ -224,18 +246,30 @@ async def run_due_checks(
         The `Notification` rows created this tick (possibly empty).
     """
     alerts = await due_trip_alerts(session, now=now, lead_minutes=lead_minutes)
-    created: list[Notification] = []
-    for alert in alerts:
-        try:
-            notification = await process_trip_alert(
-                session, alert, now=now, otp=otp, rain_service=rain_service, notifier=notifier
-            )
-        except Exception:
-            # One bad alert must not starve the rest of the tick. process_trip_alert already
-            # rolls back its own aborted DB transaction; here we just log and carry on so the
-            # remaining due alerts are still processed.
-            logger.warning("failed to process trip_alert %s; skipping", alert.id, exc_info=True)
-            continue
-        if notification is not None:
-            created.append(notification)
-    return created
+
+    semaphore = asyncio.Semaphore(4)
+    db_lock = asyncio.Lock()
+
+    async def _process(alert: TripAlert) -> Notification | None:
+        async with semaphore:
+            try:
+                return await process_trip_alert(
+                    session,
+                    alert,
+                    now=now,
+                    otp=otp,
+                    rain_service=rain_service,
+                    notifier=notifier,
+                    db_lock=db_lock,
+                )
+            except Exception:
+                # One bad alert must not starve the rest of the tick. process_trip_alert
+                # already rolls back its own aborted DB transaction; log and carry on so
+                # the remaining due alerts are still processed.
+                logger.warning(
+                    "failed to process trip_alert %s; skipping", alert.id, exc_info=True
+                )
+                return None
+
+    results = await asyncio.gather(*(_process(alert) for alert in alerts))
+    return [n for n in results if n is not None]

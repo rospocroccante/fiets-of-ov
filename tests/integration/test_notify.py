@@ -22,7 +22,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import func, select
 
 from app.clients.buienradar import RainForecast, RainSlot
-from app.clients.otp import Itinerary, Leg, Plan
+from app.clients.otp import BIKE_MODES, Itinerary, Leg, Plan
 from app.models.notification import Notification
 from app.models.trip_alert import TripAlert
 from app.models.user import User
@@ -144,7 +144,9 @@ class _StubOTP:
         self, *, from_place, to_place, mode, departure=None, num_itineraries=None, slim=False
     ) -> Plan:
         self.calls.append((mode, departure))
-        if mode == "BICYCLE":
+        # The pure-bike fan-out query is BIKE_MODES ("BICYCLE,FERRY"), not bare "BICYCLE";
+        # matching the real mode string keeps the stub honest about what the planner asks.
+        if mode == BIKE_MODES:
             if self._raise_for_origin is not None and from_place == self._raise_for_origin:
                 raise RuntimeError("boom (non-OTPError from a malformed response)")
             return Plan(itineraries=[self._bike] if self._bike is not None else [])
@@ -344,7 +346,7 @@ async def test_evaluate_plans_at_the_trip_departure_time(session):
     await evaluate_trip_alert(alert, now=NOW, otp=otp, rain_service=_StubRain(_wet_forecast()))
 
     expected = datetime.combine(NOW.date(), time(14, 0), tzinfo=AMS)
-    bike_calls = [dep for mode, dep in otp.calls if mode == "BICYCLE"]
+    bike_calls = [dep for mode, dep in otp.calls if mode == BIKE_MODES]
     assert bike_calls == [expected]
 
 

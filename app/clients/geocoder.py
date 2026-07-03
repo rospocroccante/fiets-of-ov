@@ -26,6 +26,10 @@ from app.core.config import get_settings
 # Nominatim's `viewbox` convention: lon_min,lat_min,lon_max,lat_max (two opposite corners).
 AMSTERDAM_VIEWBOX = "4.728,52.278,5.079,52.431"
 
+# Bound on the in-process name cache: unbounded growth is a slow leak in a long-lived
+# process, and ~512 distinct place names comfortably covers a day of Amsterdam lookups.
+_CACHE_MAX_ENTRIES = 512
+
 
 class GeocodeNotFound(Exception):
     """Raised when a place name matches no location within the Amsterdam bounds."""
@@ -98,4 +102,8 @@ class GeocoderClient:
         top = results[0]
         coords = (float(top["lat"]), float(top["lon"]))
         self._cache[key] = coords
+        if len(self._cache) > _CACHE_MAX_ENTRIES:
+            # Evict the oldest inserted entry (dicts keep insertion order) so the cache
+            # stays bounded without pulling in an LRU dependency.
+            self._cache.pop(next(iter(self._cache)))
         return coords

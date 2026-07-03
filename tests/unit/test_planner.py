@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 
 from app.clients.otp import BIKE_MODES, Itinerary, Leg, OTPError, Plan
@@ -99,6 +101,32 @@ async def test_all_failures_raise():
     otp = FakeOTP({}, fail={BIKE_MODES, "TRANSIT,WALK", "BICYCLE,TRANSIT,WALK"})
     with pytest.raises(OTPError):
         await gather_candidates(otp, (52.37, 4.89), (52.35, 4.86))
+
+
+async def test_non_otp_error_from_a_query_propagates():
+    # A bug (TypeError etc.) in one query must surface, not masquerade as "no transit".
+    class _BuggyOTP:
+        async def plan(
+            self, *, from_place, to_place, mode, departure=None, num_itineraries=None, slim=False
+        ) -> Plan:
+            if mode == BIKE_MODES:
+                raise TypeError("programming error")
+            return Plan(itineraries=[])
+
+    with pytest.raises(TypeError):
+        await gather_candidates(_BuggyOTP(), (52.37, 4.89), (52.35, 4.86))
+
+
+async def test_dropped_mode_set_failure_is_logged(caplog):
+    # A dropped OTPError must leave a trace: "transit silently missing" should be
+    # diagnosable from the logs, naming the mode set that failed.
+    otp = FakeOTP(
+        {BIKE_MODES: Plan(itineraries=[itin(leg("BICYCLE"), duration=1200.0)])},
+        fail={"TRANSIT,WALK"},
+    )
+    with caplog.at_level(logging.WARNING, logger="app.services.planner"):
+        await gather_candidates(otp, (52.37, 4.89), (52.35, 4.86))
+    assert any("TRANSIT,WALK" in record.message for record in caplog.records)
 
 
 # --- pedestrian-deck bike snapping fallback ---

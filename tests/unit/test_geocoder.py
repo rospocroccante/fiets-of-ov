@@ -75,3 +75,18 @@ async def test_geocode_caches_repeat_queries():
 
     assert first == second
     assert route.calls.call_count == 1  # second answer came from the cache
+
+
+@respx.mock
+async def test_geocode_cache_is_bounded():
+    # The per-process name cache must not grow without limit on a long-lived worker:
+    # past the bound the oldest entries are evicted first.
+    respx.get(URL).mock(return_value=httpx.Response(200, json=_result("52.36", "4.88")))
+    client = GeocoderClient(base_url=URL, user_agent=UA)
+
+    for i in range(600):
+        await client.geocode(f"place {i}")
+
+    assert len(client._cache) <= 512
+    assert "place 0" not in client._cache  # the oldest entry was evicted
+    assert "place 599" in client._cache  # the newest is still cached

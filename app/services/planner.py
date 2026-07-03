@@ -7,9 +7,11 @@ walk-only trips. It returns every classified candidate; the per-kind winner is c
 by generalized cost in `scoring.rank`. OTP does the real multimodal routing; this
 orchestrates.
 
-Resilience matches the rest of the service: a failed query is dropped (its kind is simply
-absent); only when *every* query fails do we raise `OTPError`, so the caller surfaces a
-clear 502 instead of a fabricated route.
+Resilience matches the rest of the service: a query that fails with `OTPError` is dropped
+(its kind is simply absent) but logged, so a silently missing kind stays diagnosable; only
+when *every* query fails do we raise `OTPError`, so the caller surfaces a clear 502
+instead of a fabricated route. Anything that is not an `OTPError` is a programming error
+and propagates immediately rather than masquerading as "no transit".
 """
 
 from __future__ import annotations
@@ -19,7 +21,7 @@ import json
 import logging
 from datetime import datetime
 
-from app.clients.otp import BIKE_MODES, Itinerary, OTPClient, OTPError
+from app.clients.otp import BIKE_MODES, Itinerary, OTPClient, OTPError, Plan
 from app.core.cache import Cache
 from app.services.scoring import Candidate, classify_kind
 from app.services.snap import bike_with_snapping
@@ -57,9 +59,22 @@ async def gather_candidates(
         return_exceptions=True,
     )
 
-    plans = [r for r in results if not isinstance(r, BaseException)]
+    plans: list[Plan] = []
+    first_error: OTPError | None = None
+    for mode, result in zip(_MODE_SETS, results, strict=True):
+        if isinstance(result, OTPError):
+            # An upstream failure on one mode set degrades that kind, not the request —
+            # but log it, or "transit silently missing" is undiagnosable in production.
+            logger.warning("OTP query for mode set %s failed: %s", mode, result)
+            if first_error is None:
+                first_error = result
+            continue
+        if isinstance(result, BaseException):
+            # Anything else is a programming error (or a CancelledError, which is never
+            # an OTPError) and must not masquerade as "no transit": re-raise it.
+            raise result
+        plans.append(result)
     if not plans:
-        first_error = next((r for r in results if isinstance(r, BaseException)), None)
         raise OTPError(f"all OTP queries failed: {first_error}") from first_error
 
     candidates: list[Candidate] = []
