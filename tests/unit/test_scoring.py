@@ -258,6 +258,32 @@ def test_departures_beyond_the_cap_never_compete():
     assert ordered[0].itinerary is land_loop
 
 
+def test_leg_spanning_midnight_matches_after_midnight_rain():
+    # A ride 23:50 -> 00:10 wraps past midnight: its window has start > end, so a naive
+    # start <= slot <= end match finds nothing and scores a wet night ride as dry.
+    start_ms = int(datetime(2026, 6, 1, 23, 50, tzinfo=TZ).timestamp() * 1000)
+    end_ms = int(datetime(2026, 6, 2, 0, 10, tzinfo=TZ).timestamp() * 1000)
+    night_leg = Leg(
+        mode="BICYCLE",
+        start_time=start_ms,
+        end_time=end_ms,
+        duration=(end_ms - start_ms) / 1000,
+        distance=1000.0,
+    )
+    night = Itinerary(
+        duration=night_leg.duration, start_time=start_ms, end_time=end_ms, legs=[night_leg]
+    )
+    wet_after_midnight = RainForecast(
+        slots=[
+            RainSlot(time=time(23, 55), intensity=0, mm_per_h=0.0),
+            RainSlot(time=time(0, 5), intensity=109, mm_per_h=1.0),
+        ]
+    )
+    scored = score(Candidate("bike", night), rain=wet_after_midnight)
+    assert scored.rain_minutes > 0
+    assert scored.cost > night.duration / 60  # the wet slot was penalized
+
+
 def test_departure_window_is_per_kind():
     # Transit's next service being 30 min out must not wipe transit from the options:
     # the window is measured against each kind's own earliest departure.

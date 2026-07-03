@@ -82,6 +82,37 @@ def test_no_forecast_degrades_to_fastest_and_flags_unknown():
     assert "unavailable" in plan.reason.lower()
 
 
+def test_rain_summary_wraps_past_midnight():
+    # The banner summary matches forecast slots to the bike window by local time-of-day;
+    # a window spanning midnight (23:50 -> 00:10) has start > end, and the naive match
+    # would report a wet 00:05 slot as dry.
+    start_ms = int(datetime(2026, 6, 1, 23, 50, tzinfo=TZ).timestamp() * 1000)
+    end_ms = int(datetime(2026, 6, 2, 0, 10, tzinfo=TZ).timestamp() * 1000)
+    night_leg = Leg(
+        mode="BICYCLE",
+        start_time=start_ms,
+        end_time=end_ms,
+        duration=(end_ms - start_ms) / 1000,
+        distance=1000.0,
+        to_name="Home",
+    )
+    night_bike = Candidate(
+        "bike",
+        Itinerary(
+            duration=night_leg.duration, start_time=start_ms, end_time=end_ms, legs=[night_leg]
+        ),
+    )
+    forecast = RainForecast(
+        slots=[
+            RainSlot(time=time(23, 55), intensity=0, mm_per_h=0.0),
+            RainSlot(time=time(0, 5), intensity=109, mm_per_h=1.0),
+        ]
+    )
+    plan = recommend([night_bike], rain=forecast)
+    assert plan.rain_expected is True
+    assert plan.max_rain_mm_per_h == 1.0
+
+
 def test_bike_only_recommends_bike_with_raincoat_when_wet():
     plan = recommend([BIKE], rain=rain(*range(0, 60, 5)))
     assert plan.recommendation == "bike"

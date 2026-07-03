@@ -31,6 +31,7 @@ from app.services.scoring import (
     Candidate,
     OptionKind,
     ScoredCandidate,
+    in_time_window,
     rank,
 )
 
@@ -76,7 +77,8 @@ def _rain_summary(
     # per leg.
     start = _local_time(itinerary.start_time)
     end = _local_time(itinerary.end_time)
-    window = [s for s in rain.slots if start <= s.time <= end]
+    # in_time_window wraps past midnight, so a 23:50 -> 00:10 ride still sees its slots.
+    window = [s for s in rain.slots if in_time_window(s.time, start, end)]
     peak = round(max((s.mm_per_h for s in window), default=0.0), 4)
     expected = any(s.mm_per_h >= threshold for s in window)
     return expected, peak

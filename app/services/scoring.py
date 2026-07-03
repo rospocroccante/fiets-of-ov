@@ -113,6 +113,19 @@ def _local_time(epoch_ms: int) -> time:
     return datetime.fromtimestamp(epoch_ms / 1000, tz=LOCAL_TZ).time()
 
 
+def in_time_window(t: time, start: time, end: time) -> bool:
+    """True when time-of-day `t` falls in [start, end] (inclusive), wrapping midnight.
+
+    Forecast slots carry only a wall-clock time, so legs are matched to them by naive
+    time-of-day. A window spanning midnight (e.g. 23:50 -> 00:10) has start > end, and a
+    plain `start <= t <= end` would match nothing — scoring a wet night ride as dry.
+    Such a window instead matches times on either side of the wrap.
+    """
+    if start <= end:
+        return start <= t <= end
+    return t >= start or t <= end
+
+
 def _rain_penalty(peak_mm_h: float, weights: Weights) -> float:
     for bound, penalty in weights.rain_bands:
         if peak_mm_h < bound:
@@ -124,7 +137,7 @@ def _leg_rain(leg: Leg, rain: RainForecast, threshold: float) -> tuple[float, fl
     """Return (exposed_minutes_in_rain, peak_mm_h) for an exposed leg over its window."""
     start = _local_time(leg.start_time)
     end = _local_time(leg.end_time)
-    wet = [s for s in rain.slots if start <= s.time <= end and s.mm_per_h >= threshold]
+    wet = [s for s in rain.slots if in_time_window(s.time, start, end) and s.mm_per_h >= threshold]
     if not wet:
         return 0.0, 0.0
     # 5-min slot granularity: each wet slot contributes up to 5 min, capped by leg length.
