@@ -47,6 +47,28 @@ class GeocoderClient:
         # Place names are stable, so an in-process cache (keyed by normalised query) both
         # speeds up repeats and keeps us within Nominatim's ~1 req/s usage policy.
         self._cache: dict[str, tuple[float, float]] = {}
+        # One shared AsyncClient, created lazily on first use so instantiation needs no
+        # event loop; per-request construction would rebuild the SSL context every call
+        # and never reuse a connection.
+        self._client: httpx.AsyncClient | None = None
+
+    def _http(self) -> httpx.AsyncClient:
+        """The shared HTTP client, created on first use."""
+        if self._client is None:
+            # The identifying User-Agent Nominatim's policy requires is fixed for the
+            # client's lifetime, so it lives on the shared client, not per request.
+            self._client = httpx.AsyncClient(
+                timeout=self._timeout,
+                headers={"User-Agent": self._user_agent},
+                limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+            )
+        return self._client
+
+    async def aclose(self) -> None:
+        """Close the shared HTTP client and its pooled connections, if one was created."""
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
 
     async def geocode(self, query: str) -> tuple[float, float]:
         """Return `(lat, lon)` for `query`, bounded to Amsterdam.
@@ -66,12 +88,9 @@ class GeocoderClient:
             "viewbox": AMSTERDAM_VIEWBOX,
             "bounded": 1,
         }
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
-            response = await client.get(
-                self._base_url, params=params, headers={"User-Agent": self._user_agent}
-            )
-            response.raise_for_status()
-            results = response.json()
+        response = await self._http().get(self._base_url, params=params)
+        response.raise_for_status()
+        results = response.json()
 
         if not results:
             raise GeocodeNotFound(f"no Amsterdam location found for {query!r}")

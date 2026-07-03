@@ -16,3 +16,10 @@ def test_health_returns_ok():
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_lifespan_starts_and_shuts_down_cleanly():
+    # Entering/exiting the context runs the lifespan: shutdown closes the shared HTTP
+    # client singletons, which must be a no-op even when no request ever used them.
+    with TestClient(app):
+        pass

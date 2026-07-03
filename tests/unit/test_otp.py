@@ -244,6 +244,23 @@ async def test_slim_plan_overrides_num_and_drops_geometry_and_steps():
 
 
 @respx.mock
+async def test_reuses_one_http_client_across_calls():
+    # The AsyncClient is built lazily once and shared (connection pooling); aclose()
+    # releases it so a fresh one would be created on next use.
+    respx.post(GQL_URL).mock(return_value=httpx.Response(200, json=BIKE))
+    client = OTPClient(base_url=URL)
+
+    await client.plan(from_place=FROM, to_place=TO, mode="BICYCLE")
+    shared = client._client
+    assert shared is not None
+    await client.plan(from_place=FROM, to_place=TO, mode="BICYCLE")
+    assert client._client is shared
+
+    await client.aclose()
+    assert client._client is None
+
+
+@respx.mock
 async def test_full_plan_still_selects_geometry_and_steps():
     # The default (non-slim) query must keep the drawable detail /v1/plan relies on.
     route = respx.post(GQL_URL).mock(return_value=httpx.Response(200, json=BIKE))

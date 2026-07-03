@@ -82,6 +82,29 @@ class BuienradarClient:
         settings = get_settings()
         self._base_url = base_url or settings.buienradar_url
         self._timeout = timeout if timeout is not None else settings.request_timeout_seconds
+        # One shared AsyncClient, created lazily on first use so instantiation needs no
+        # event loop; per-request construction would rebuild the SSL context every call
+        # and never reuse a connection.
+        self._client: httpx.AsyncClient | None = None
+
+    def _http(self) -> httpx.AsyncClient:
+        """The shared HTTP client, created on first use."""
+        if self._client is None:
+            # Buienradar 302-redirects fine-grained coordinates to a rounded,
+            # trailing-slash URL, so the client must follow redirects or every real
+            # request fails on the 302.
+            self._client = httpx.AsyncClient(
+                timeout=self._timeout,
+                follow_redirects=True,
+                limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+            )
+        return self._client
+
+    async def aclose(self) -> None:
+        """Close the shared HTTP client and its pooled connections, if one was created."""
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
 
     async def get_rain_forecast(self, *, lat: float, lon: float) -> RainForecast:
         """Return the ~2h precipitation forecast for `(lat, lon)` as typed mm/h slots.
@@ -90,9 +113,6 @@ class BuienradarClient:
         `ValueError` if a 2xx body can't be parsed as raintext (including an empty body).
         Callers decide how to degrade — the rain service treats both as "unavailable".
         """
-        # Buienradar 302-redirects fine-grained coordinates to a rounded, trailing-slash
-        # URL, so we must follow redirects or every real request fails on the 302.
-        async with httpx.AsyncClient(timeout=self._timeout, follow_redirects=True) as client:
-            response = await client.get(self._base_url, params={"lat": lat, "lon": lon})
-            response.raise_for_status()
+        response = await self._http().get(self._base_url, params={"lat": lat, "lon": lon})
+        response.raise_for_status()
         return RainForecast(slots=_parse_raintext(response.text))

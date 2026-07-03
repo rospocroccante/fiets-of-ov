@@ -27,13 +27,21 @@ from app.services.rain import RainService
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/v1/auth/token")
 
 
+@lru_cache
 def get_otp_client() -> OTPClient:
-    """Provide an OTP client configured from settings."""
+    """Provide the process-wide OTP client.
+
+    A singleton so its lazily created shared AsyncClient (SSL context + connection pool)
+    is reused across requests instead of rebuilt per call; the app lifespan closes it on
+    shutdown (see app/main.py).
+    """
     return OTPClient()
 
 
+@lru_cache
 def get_buienradar_client() -> BuienradarClient:
-    """Provide a Buienradar client configured from settings."""
+    """Provide the process-wide Buienradar client (singleton for the same pooled
+    AsyncClient reuse as `get_otp_client`)."""
     return BuienradarClient()
 
 

@@ -20,7 +20,7 @@ from arq import cron
 from arq.connections import RedisSettings
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from app.api.deps import get_otp_client, get_rain_service
+from app.api.deps import get_buienradar_client, get_otp_client, get_rain_service
 from app.core.config import get_settings
 from app.db.session import get_engine
 from app.services.notifier import LogNotifier
@@ -67,6 +67,17 @@ async def check_trip_alerts(ctx: dict[str, Any]) -> None:
         )
 
 
+async def shutdown(ctx: dict[str, Any]) -> None:
+    """ARQ shutdown hook: close the shared HTTP clients' pooled connections.
+
+    The worker reuses the process-wide client singletons across ticks (see
+    `check_trip_alerts`); this releases their sockets when the worker exits. `aclose()`
+    on a never-used client is a no-op, so this is safe even if no tick ever ran.
+    """
+    await get_otp_client().aclose()
+    await get_buienradar_client().aclose()
+
+
 class WorkerSettings:
     """ARQ worker configuration (the object `arq` is pointed at to run the worker).
 
@@ -80,3 +91,4 @@ class WorkerSettings:
     redis_settings = RedisSettings.from_dsn(get_settings().redis_url)
     # Fire on minutes 0,5,10,…,55 — i.e. every 5 minutes, aligned to the wall clock.
     cron_jobs = [cron(check_trip_alerts, minute=set(range(0, 60, 5)))]
+    on_shutdown = shutdown

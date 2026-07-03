@@ -220,6 +220,26 @@ class OTPClient:
         root = (base_url or settings.otp_base_url).rstrip("/")
         self._graphql_url = f"{root}{_GRAPHQL_PATH}"
         self._timeout = timeout if timeout is not None else settings.request_timeout_seconds
+        # One shared AsyncClient per instance, created lazily on first use: constructing
+        # a client builds an SSL context (sync CPU work on the event loop) and a fresh
+        # pool, so per-request construction costs ~10-20 ms and forbids keep-alive reuse.
+        # Lazy so the class can be instantiated without a running event loop.
+        self._client: httpx.AsyncClient | None = None
+
+    def _http(self) -> httpx.AsyncClient:
+        """The shared HTTP client, created on first use."""
+        if self._client is None:
+            self._client = httpx.AsyncClient(
+                timeout=self._timeout,
+                limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+            )
+        return self._client
+
+    async def aclose(self) -> None:
+        """Close the shared HTTP client and its pooled connections, if one was created."""
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
 
     async def plan(
         self,
@@ -270,12 +290,11 @@ class OTPClient:
         }
         query = _SLIM_PLAN_QUERY if slim else _PLAN_QUERY
         try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
-                response = await client.post(
-                    self._graphql_url, json={"query": query, "variables": variables}
-                )
-                response.raise_for_status()
-                data = response.json()
+            response = await self._http().post(
+                self._graphql_url, json={"query": query, "variables": variables}
+            )
+            response.raise_for_status()
+            data = response.json()
         except httpx.HTTPError as exc:
             # Covers connect/read timeouts, connection errors, and non-2xx statuses.
             raise OTPError(f"OTP request failed: {exc}") from exc
