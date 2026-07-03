@@ -11,6 +11,7 @@ stay fully offline.
 
 import inspect
 
+from app.core.config import get_settings
 from app.workers.main import WorkerSettings, check_trip_alerts
 
 
@@ -45,3 +46,14 @@ def test_cron_fires_once_every_five_minutes() -> None:
     job = WorkerSettings.cron_jobs[0]
     assert job.minute == set(range(0, 60, 5))
     assert job.second == 0
+
+
+def test_cron_cadence_derives_from_notify_scheduler_seconds() -> None:
+    """The minute-set is NOTIFY_SCHEDULER_SECONDS translated to arq's minute granularity.
+
+    The schedule is computed at import time from the settings singleton, so this asserts
+    the wiring (setting -> minute step, sub-60 s clamped to every minute) rather than
+    re-importing the module under a mutated environment.
+    """
+    step = max(1, get_settings().notify_scheduler_seconds // 60)
+    assert WorkerSettings.cron_jobs[0].minute == set(range(0, 60, step))

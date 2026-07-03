@@ -228,6 +228,10 @@ def test_custom_weights_defaults_match_spec():
     assert w.ferry_bonus_min == 3.0
     assert w.station_access_bonus_min == 2.0
     assert w.transit_bias_min == 10.0
+    # Departure handling: waited minutes cost as much as ridden minutes, and nothing
+    # departing more than 30 min after its kind's earliest option competes at all.
+    assert w.depart_delay_factor == 1.0
+    assert w.max_depart_wait_min == 30.0
 
 
 def test_waiting_for_a_much_faster_ride_beats_the_land_loop():

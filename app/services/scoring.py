@@ -203,9 +203,10 @@ def rank(
 
     Departure handling: OTP's search window returns itineraries leaving up to ~60 min
     apart. Within each kind, only candidates departing within `weights.max_depart_wait_min`
-    of that kind's earliest departure compete — the fastest sailing is no use if it leaves
-    in half an hour. Any residual delay can additionally be priced in per minute via
-    `weights.depart_delay_factor` (default 0: shown time stays the ride time).
+    (default 30) of that kind's earliest departure compete — the fastest sailing is no use
+    if it leaves in half an hour. Surviving candidates have their waited minutes priced
+    into cost via `weights.depart_delay_factor` (default 1.0: a minute spent waiting costs
+    as much as a minute riding), while the card still shows the winner's own ride time.
     """
     if not candidates:
         return []

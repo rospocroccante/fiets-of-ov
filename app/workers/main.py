@@ -90,18 +90,22 @@ async def shutdown(ctx: dict[str, Any]) -> None:
     await get_buienradar_client().aclose()
 
 
+# arq cron is minute-granular, so the seconds-based NOTIFY_SCHEDULER_SECONDS maps to a
+# minute step: sub-60 s values clamp to every minute (the finest cadence arq can run),
+# and the 300 s default fires on minutes 0,5,10,…,55, aligned to the wall clock.
+_SWEEP_STEP_MINUTES = max(1, get_settings().notify_scheduler_seconds // 60)
+
+
 class WorkerSettings:
     """ARQ worker configuration (the object `arq` is pointed at to run the worker).
 
     `redis_settings` is parsed from the DSN at import time (no connection is opened); the
-    cron runs the sweep every 5 minutes, matching Buienradar's ~5-min update cadence, so a
-    tick never re-evaluates against unchanged forecast data. `notify_scheduler_seconds`
-    documents the same 300 s cadence in config; the cron's minute-set is the concrete
-    schedule ARQ understands.
+    cron sweep cadence comes from `notify_scheduler_seconds` (default 300 s = every 5 min,
+    matching Buienradar's ~5-min update cadence, so a tick never re-evaluates against
+    unchanged forecast data), translated to the minute-set arq understands.
     """
 
     redis_settings = RedisSettings.from_dsn(get_settings().redis_url)
-    # Fire on minutes 0,5,10,…,55 — i.e. every 5 minutes, aligned to the wall clock.
-    cron_jobs = [cron(check_trip_alerts, minute=set(range(0, 60, 5)))]
+    cron_jobs = [cron(check_trip_alerts, minute=set(range(0, 60, _SWEEP_STEP_MINUTES)))]
     on_startup = startup
     on_shutdown = shutdown
