@@ -38,3 +38,6 @@ uv.lock
 .DS_Store
 .idea/
 .vscode/
+
+# Private planning docs (superpowers plans/specs) — never public
+/docs/
