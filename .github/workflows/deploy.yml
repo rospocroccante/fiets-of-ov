@@ -1,0 +1,25 @@
+name: Deploy to VPS
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+concurrency:
+  group: deploy-vps
+  cancel-in-progress: true
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Sync API source and rebuild on VPS
+        env:
+          SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          mkdir -p ~/.ssh && echo "$SSH_KEY" > ~/.ssh/deploy && chmod 600 ~/.ssh/deploy
+          ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          RSH="ssh -i $HOME/.ssh/deploy"
+          rsync -az --delete -e "$RSH" app/ "root@$HOST:/srv/projects/fiets/api/app/"
+          rsync -az --delete -e "$RSH" alembic/ "root@$HOST:/srv/projects/fiets/api/alembic/"
+          rsync -az -e "$RSH" alembic.ini pyproject.toml Dockerfile "root@$HOST:/srv/projects/fiets/api/"
+          $RSH "root@$HOST" 'cd /srv/projects/fiets && docker compose build fiets-api && docker compose up -d fiets-api'
