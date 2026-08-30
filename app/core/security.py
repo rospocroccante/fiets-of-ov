@@ -8,6 +8,10 @@ network, so it can be unit-tested with fixtures alone. The two concerns it owns 
   bcrypt only hashes the first 72 bytes and bcrypt 5.x **raises** on longer input, so the
   registration schema (`UserCreate`) rejects over-72-byte passwords up front (422) — we
   neither crash nor silently truncate. A SHA prehash to lift the cap is out of scope.
+  bcrypt is deliberately slow (~100–300 ms of solid CPU at the default cost), which is the
+  whole point for an offline attacker but disastrous inside an async event loop: a single
+  login would stall *every* concurrent request for that long. So each primitive has an
+  `_async` sibling that runs it on a worker thread, and async callers use those.
 
 - *Access tokens* — short-lived HS256 JWTs whose subject (`sub`) is the user id. HS256 is
   symmetric, which suits a single service: the same `jwt_secret` signs and verifies, with
@@ -17,6 +21,7 @@ network, so it can be unit-tested with fixtures alone. The two concerns it owns 
 
 from datetime import UTC, datetime, timedelta
 
+import anyio.to_thread
 import bcrypt
 import jwt
 
@@ -54,6 +59,28 @@ def verify_password(password: str, hashed: str) -> bool:
         # bcrypt raises if `hashed` is not a valid bcrypt string. Treat that as "no match"
         # so a bad row can never crash authentication.
         return False
+
+
+async def hash_password_async(password: str) -> str:
+    """`hash_password` moved off the event loop, for use from async request handlers.
+
+    bcrypt burns ~100–300 ms of CPU with the GIL released, so running it inline would block
+    every other coroutine on the loop for the duration of one registration. anyio's thread
+    pool is the same one Starlette uses for sync endpoints, so this adds no machinery of its
+    own — it just stops one password hash from becoming everybody's latency.
+    """
+    return await anyio.to_thread.run_sync(hash_password, password)
+
+
+async def verify_password_async(password: str, hashed: str) -> bool:
+    """`verify_password` moved off the event loop, for use from async request handlers.
+
+    Same reasoning as `hash_password_async`: verification costs the same bcrypt work as
+    hashing. Offloading preserves the login path's timing-equalisation property — the dummy
+    verify for an unknown email is offloaded identically, so the two cases still take the
+    same wall-clock time and neither is an enumeration oracle.
+    """
+    return await anyio.to_thread.run_sync(verify_password, password, hashed)
 
 
 def create_access_token(subject: str, expires_delta: timedelta | None = None) -> str:

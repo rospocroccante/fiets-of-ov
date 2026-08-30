@@ -14,7 +14,10 @@ upstream:
   never a failed request. The cache is an optimisation, not a dependency.
 - **Honest "no data".** Only when there is no forecast at all (Buienradar down *and* no
   usable cache) do we return None, which the decision engine renders as a degraded,
-  bike-first answer.
+  bike-first answer. That None is the *only* degradation signal this service emits, and it
+  is load-bearing: `recommend()` turns it into the `forecast_degraded` flag the API returns,
+  so clients can tell "we checked, it's dry" from "we couldn't check". A stale-cache hit is
+  deliberately not degraded — it is real data, just a few minutes old.
 
 The clock is injectable so freshness is deterministic in tests.
 """

@@ -6,13 +6,16 @@ alert is sent at most once per trip per departure day. The Notifier is only the 
 side: given an already-persisted notification, push it to the user.
 
 For the MVP that delivery is a log line (LogNotifier) — no external dependency, no network,
-nothing that can fail and leave the outbox row lying about a delivery that never happened.
-Real channels (push, email) plug in later by implementing the same Protocol, so the notify
-service can stay agnostic about *how* an alert reaches the user. A *fallible* channel needs
-one more thing first: the notify service currently delivers best-effort, single-attempt
-(failures are logged, not retried), so before wiring email/push add a `delivered_at` column
-and per-tick re-delivery of undelivered rows (see Decisions) — otherwise a transient outage
-would record an alert as sent that never arrived.
+nothing that can fail. Real channels (push, email) plug in later by implementing the same
+Protocol, so the notify service can stay agnostic about *how* an alert reaches the user, and
+a fallible one is now safe to wire: the notify service stamps `notifications.delivered_at`
+only on a successful send and re-attempts undelivered rows on each worker tick, so a
+transient outage self-heals instead of leaving a row claiming an alert that never arrived.
+
+That makes delivery at-least-once, which is the contract implementations should assume: a
+`send()` that raises will be called again for the same notification on a later tick, so a
+channel with its own idempotency key should derive it from `trip_alert_id` + the departure
+day rather than assume one call per alert.
 
 The Protocol is duck-typed on purpose: callers pass the SQLAlchemy `Notification`, but
 anything exposing `trip_alert_id` and `reason` works, which keeps these notifiers trivially

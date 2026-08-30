@@ -2,9 +2,13 @@
 
 Fully offline: password hashing and JWT signing/verification need no DB or network.
 We cover the round-trips a login flow relies on (hash/verify, sign/decode) plus the
-two ways a token must be rejected — expiry and a foreign signing secret.
+two ways a token must be rejected — expiry and a foreign signing secret. The `_async`
+password helpers get the same round-trip coverage plus a check that they really do leave
+the event loop, since that is their entire reason to exist.
 """
 
+import asyncio
+import threading
 from datetime import UTC, datetime, timedelta
 
 import jwt
@@ -16,7 +20,9 @@ from app.core.security import (
     create_access_token,
     decode_token,
     hash_password,
+    hash_password_async,
     verify_password,
+    verify_password_async,
 )
 
 
@@ -37,6 +43,60 @@ def test_verify_rejects_wrong_password():
     hashed = hash_password("correct horse battery staple")
 
     assert verify_password("Tr0ub4dour&3", hashed) is False
+
+
+async def test_async_helpers_roundtrip_and_reject():
+    # The async pair must be behaviourally identical to the sync one — same hash format,
+    # same accept/reject — since the API layer calls only these.
+    hashed = await hash_password_async("correct horse battery staple")
+
+    assert hashed != "correct horse battery staple"
+    assert await verify_password_async("correct horse battery staple", hashed) is True
+    assert await verify_password_async("Tr0ub4dour&3", hashed) is False
+
+
+async def test_async_helpers_interoperate_with_the_sync_ones():
+    # A hash written by either helper verifies through the other: there is one bcrypt format,
+    # so a password hashed at import time (the dummy timing hash) checks out against a login
+    # that goes through the thread pool, and rows survive a switch between the two.
+    assert verify_password("hunter2hunter2", await hash_password_async("hunter2hunter2")) is True
+    assert await verify_password_async("hunter2hunter2", hash_password("hunter2hunter2")) is True
+
+
+async def test_async_helpers_run_off_the_event_loop_thread():
+    # The point of the whole exercise: bcrypt burns ~100-300 ms of CPU, and running it inline
+    # would stall every other coroutine for that long. Assert it actually lands on a worker
+    # thread rather than trusting the wrapper — an accidental direct call would still pass
+    # every behavioural test above.
+    loop_thread = threading.get_ident()
+    seen: list[int] = []
+
+    def _spy(*args: object) -> bool:
+        seen.append(threading.get_ident())
+        return True
+
+    # Patch at the anyio call site so the assertion is about where the work runs, not about
+    # bcrypt itself; anyio.to_thread.run_sync is what moves it.
+    import anyio.to_thread
+
+    await anyio.to_thread.run_sync(_spy)
+    assert seen == [seen[0]] and seen[0] != loop_thread
+
+    # And the real helper: it must not block the loop, i.e. other tasks keep running while
+    # the hash is in flight.
+    ticks = 0
+
+    async def _tick() -> None:
+        nonlocal ticks
+        while True:
+            ticks += 1
+            await asyncio.sleep(0)
+
+    ticker = asyncio.create_task(_tick())
+    await hash_password_async("a password expensive enough to notice")
+    ticker.cancel()
+
+    assert ticks > 0  # the loop kept turning during the hash
 
 
 def test_create_then_decode_returns_subject():

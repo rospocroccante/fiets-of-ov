@@ -69,7 +69,10 @@ class OptionOut(BaseModel):
     kind: OptionKind
     recommended: bool
     score: float  # generalized cost (sort aid; clients may ignore)
-    rain_minutes: int  # cycling/walking minutes exposed to rain (0 if dry)
+    # Cycling/walking minutes exposed to rain. 0 means "dry" only when the response's
+    # `forecast_degraded` is false — with no forecast every option scores as if dry, so this
+    # reads 0 there too. Check the flag before showing it as a weather fact.
+    rain_minutes: int
     itinerary: ItineraryOut
 
 
@@ -80,6 +83,10 @@ class PlanResponse(BaseModel):
     reason: str
     max_rain_mm_per_h: float | None
     rain_expected: bool | None
+    # True when no forecast was available, so the ranking below is weather-blind (every
+    # option was costed as if dry, and every `rain_minutes` reads 0). Mirrors
+    # AdviceResponse.forecast_degraded — see there for the full reasoning.
+    forecast_degraded: bool = False
     origin: PlaceOut
     destination: PlaceOut
     options: list[OptionOut]  # ranked, recommended first

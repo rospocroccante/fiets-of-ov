@@ -47,9 +47,14 @@ curl "localhost:8000/v1/advice?from=Amsterdam%20Centraal&to=Vondelpark"
   "bike_minutes": 24,
   "transit_minutes": 30,
   "max_rain_mm_per_h": 0.0,
-  "rain_expected": false
+  "rain_expected": false,
+  "forecast_degraded": false
 }
 ```
+
+`forecast_degraded` is `true` when no rain forecast could be obtained at all: the recommendation still comes back, but it was computed as if the whole trip were dry, so present it with a caveat rather than as a weather-informed answer.
+
+An unroutable trip (OTP answers, but has no itinerary) is a **404** `no route found for this trip`; a genuine routing outage stays a **502** `routing upstream unavailable`.
 
 The decision is driven by **rain, not speed**: a dry ride → bike; rain during the ride → public transport (so you stay dry), falling back to bike-with-a-warning when there's no transit option. See [`app/services/advice.py`](app/services/advice.py).
 
@@ -58,7 +63,8 @@ The decision is driven by **rain, not speed**: a dry ride → bike; rain during 
 One flaky upstream must never take down a recommendation:
 
 - **Caching** — the Buienradar forecast is cached in Redis (≈5 min fresh window, served without re-hitting the API; 2 h retention for fallback).
-- **Graceful degradation** — if Buienradar is unavailable, the service serves a recent **stale** forecast if it has one; otherwise it returns a bike-first answer with the forecast flagged as unknown (`rain_expected` / `max_rain_mm_per_h` are `null`) — never a 502.
+- **Graceful degradation** — if Buienradar is unavailable, the service serves a recent **stale** forecast if it has one; otherwise it returns a bike-first answer with the forecast flagged as unknown (`rain_expected` / `max_rain_mm_per_h` are `null`, and `forecast_degraded` is `true`) — never a 502.
+- **At-least-once alerts** — a rain notification is written to the `notifications` outbox before it is sent, and `delivered_at` is stamped only once the channel accepts it; the worker retries undelivered rows on each tick, so a transient outage costs a few minutes rather than the warning.
 - **Fail-open cache** — Redis is an optimisation, not a dependency: if it's down or slow (bounded by a socket timeout), the request still runs.
 - **Bounded everything** — every external call (OTP, Buienradar, Nominatim, Redis) has an explicit timeout.
 
@@ -83,6 +89,9 @@ All config comes from `.env` (see [`.env.example`](.env.example)); never commit 
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
+| `APP_ENV` | `dev` | `dev`/`test` allow the placeholder `JWT_SECRET`; any other value refuses to start without a real one |
+| `JWT_SECRET` | dev placeholder | Signs access tokens — **must** be ≥32 random bytes outside dev/test (`openssl rand -hex 32`) |
+| `CORS_ALLOW_ORIGINS` | `http://localhost:5173` | Comma-separated browser origin allowlist; `*` is rejected |
 | `OTP_BASE_URL` | `http://localhost:8080` | OTP2 host root (client appends the GTFS GraphQL path) |
 | `BUIENRADAR_URL` | `…/data/raintext` | Buienradar precipitation feed |
 | `NOMINATIM_URL` | `…/search` | Forward geocoder for place names |

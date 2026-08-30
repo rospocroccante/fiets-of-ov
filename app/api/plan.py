@@ -94,7 +94,11 @@ async def get_plan(
     except OTPError as exc:
         raise HTTPException(status_code=502, detail="routing upstream unavailable") from exc
     if not candidates:
-        raise HTTPException(status_code=502, detail="no route found for this trip")
+        # OTP answered, it just has no way to make this trip (endpoints off the network, an
+        # unreachable island, a walk-only result). That is a fact about the request, not an
+        # outage, so it must not share the 502 that means "our upstream is broken" — a client
+        # should tell the user to pick another destination, and a monitor should not page.
+        raise HTTPException(status_code=404, detail="no route found for this trip")
 
     plan = recommend(candidates, rain)
 
@@ -103,6 +107,7 @@ async def get_plan(
         reason=plan.reason,
         max_rain_mm_per_h=plan.max_rain_mm_per_h,
         rain_expected=plan.rain_expected,
+        forecast_degraded=plan.forecast_degraded,
         origin=PlaceOut(lat=from_place[0], lon=from_place[1]),
         destination=PlaceOut(lat=to_place[0], lon=to_place[1]),
         options=[

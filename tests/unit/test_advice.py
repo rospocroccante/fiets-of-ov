@@ -66,6 +66,8 @@ def test_dry_recommends_fastest_and_reports_dry():
     assert plan.options[0].kind == plan.recommendation
     assert plan.bike_minutes == 20
     assert plan.transit_minutes == 14
+    # A forecast we actually read: the answer is weather-informed, degraded is False.
+    assert plan.forecast_degraded is False
 
 
 def test_rain_on_ride_flips_to_transit_with_line_in_reason():
@@ -80,6 +82,21 @@ def test_no_forecast_degrades_to_fastest_and_flags_unknown():
     assert plan.rain_expected is None
     assert plan.max_rain_mm_per_h is None
     assert "unavailable" in plan.reason.lower()
+    assert plan.forecast_degraded is True
+
+
+def test_degraded_forecast_is_distinguishable_from_a_dry_day():
+    # The failure this guards against: with no forecast, scoring applies no rain penalty, so
+    # every candidate's cost and rain_minutes come out identical to a genuinely dry day. The
+    # explicit flag is the only thing that tells the two apart — assert both that the numbers
+    # really do coincide and that the flag separates them.
+    degraded = recommend([BIKE, TRANSIT], rain=None)
+    dry = recommend([BIKE, TRANSIT], rain=rain())
+
+    assert [o.cost for o in degraded.options] == [o.cost for o in dry.options]
+    assert [o.rain_minutes for o in degraded.options] == [0, 0]
+    assert [o.rain_minutes for o in dry.options] == [0, 0]
+    assert (degraded.forecast_degraded, dry.forecast_degraded) == (True, False)
 
 
 def test_rain_summary_wraps_past_midnight():

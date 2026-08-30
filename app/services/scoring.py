@@ -165,6 +165,11 @@ def score(
     total_minutes = itin.duration / 60
     rain_cost = 0.0
     rain_minutes = 0.0
+    # No forecast means no rain penalty, so an unavailable Buienradar produces exactly the
+    # same numbers as a clear afternoon. That is the only sane fallback here (inventing a
+    # penalty would be worse than admitting ignorance), but it makes the output ambiguous on
+    # its own — which is why `recommend()` carries a separate `forecast_degraded` flag out to
+    # the API. Do not read a 0 `rain_minutes` as "dry" without checking it.
     if rain is not None:
         for leg in itin.legs:
             if leg.mode in _EXPOSED_MODES:

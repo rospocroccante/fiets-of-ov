@@ -54,6 +54,12 @@ class RankedPlan:
     rain_expected: bool | None
     bike_minutes: int | None
     transit_minutes: int | None
+    # True when `recommend()` was handed no forecast at all. The rain service signals that
+    # by returning None (Buienradar down and nothing cached); scoring then costs every
+    # candidate as if dry, so the ranking is weather-blind. Carried as its own boolean
+    # because "the rain fields are None" is a fact a caller has to *infer*, and the notifier
+    # and the API both need to state it explicitly rather than re-derive it.
+    forecast_degraded: bool
 
 
 def _rain_summary(
@@ -134,4 +140,5 @@ def recommend(candidates: list[Candidate], rain: RainForecast | None) -> RankedP
         rain_expected=rain_expected,
         bike_minutes=_minutes(bike.itinerary.duration) if bike else None,
         transit_minutes=_minutes(transit.itinerary.duration) if transit else None,
+        forecast_degraded=rain is None,
     )

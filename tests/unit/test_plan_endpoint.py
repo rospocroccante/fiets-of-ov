@@ -193,6 +193,46 @@ def test_plan_bike_routing_failure_returns_502():
 
     response = TestClient(app).get("/v1/plan", params={"from": "52.37,4.89", "to": "52.35,4.86"})
     assert response.status_code == 502
+    assert response.json()["detail"] == "routing upstream unavailable"
+
+
+@respx.mock
+def test_plan_no_route_found_returns_404_not_502():
+    # OTP answered fine, it just has no itinerary for this pair. Mirrors /v1/advice: an
+    # unroutable request is a 404 about the request, not a 502 about our upstream.
+    respx.post(GQL_URL).mock(return_value=httpx.Response(200, json=_gql([])))
+    respx.get(RAIN_URL).mock(return_value=httpx.Response(200, text=RAIN_DRY))
+
+    response = TestClient(app).get("/v1/plan", params={"from": "52.37,4.89", "to": "52.35,4.86"})
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "no route found for this trip"
+
+
+@respx.mock
+def test_plan_flags_a_degraded_forecast_and_zeroed_rain_minutes():
+    # With Buienradar down every option is costed as if dry, so `rain_minutes` reads 0 on
+    # each — indistinguishable from a clear day by the numbers alone. `forecast_degraded` is
+    # what lets a client caption the map with "couldn't check the weather" instead of
+    # presenting a weather-blind ranking as a weather-aware one.
+    respx.post(GQL_URL).mock(
+        side_effect=_otp_by_modes(
+            {
+                BIKE_MODES: httpx.Response(200, json=BIKE_JSON),
+                "TRANSIT,WALK": httpx.Response(200, json=TRANSIT_JSON),
+                "BICYCLE,TRANSIT,WALK": httpx.Response(200, json=MIXED_JSON),
+            }
+        )
+    )
+    respx.get(RAIN_URL).mock(return_value=httpx.Response(503))
+
+    response = TestClient(app).get("/v1/plan", params={"from": "52.37,4.89", "to": "52.35,4.86"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["forecast_degraded"] is True
+    assert body["rain_expected"] is None
+    assert [o["rain_minutes"] for o in body["options"]] == [0] * len(body["options"])
 
 
 @respx.mock

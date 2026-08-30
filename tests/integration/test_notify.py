@@ -16,7 +16,8 @@ on a fixed CEST day) overlaps a wet Buienradar slot, so `decide()` yields
 and `now` is anchored just before it, so the alert falls inside the lead window.
 """
 
-from datetime import datetime, time
+import logging
+from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
@@ -30,6 +31,7 @@ from app.services.notify import (
     due_trip_alerts,
     evaluate_trip_alert,
     process_trip_alert,
+    redeliver_pending,
     run_due_checks,
 )
 
@@ -172,6 +174,24 @@ class _CapturingNotifier:
         self.sent: list[Notification] = []
 
     async def send(self, notification: Notification) -> None:
+        self.sent.append(notification)
+
+
+class _FlakyNotifier:
+    """A channel that fails its first `fail_times` sends, then starts working.
+
+    Models the case redelivery exists for: a transient outage (an SMTP server bouncing, a
+    push gateway 503ing) that clears on its own before the trip departs.
+    """
+
+    def __init__(self, fail_times: int = 1) -> None:
+        self._remaining_failures = fail_times
+        self.sent: list[Notification] = []
+
+    async def send(self, notification: Notification) -> None:
+        if self._remaining_failures > 0:
+            self._remaining_failures -= 1
+            raise RuntimeError("delivery channel down")
         self.sent.append(notification)
 
 
@@ -370,6 +390,44 @@ async def test_process_with_no_rain_data_creates_nothing(session):
     assert notifier.sent == []
 
 
+async def test_evaluate_marks_a_missing_forecast_as_degraded(session):
+    # The worker's own view of "we couldn't check": the advice it builds carries the flag, so
+    # the skip below is traceable to a Buienradar outage rather than to a dry day.
+    user = await _make_user(session)
+    alert = await _make_alert(session, user)
+    otp = _StubOTP(bike=_bike_itinerary(), transit=_tram_plan())
+
+    degraded = await evaluate_trip_alert(alert, now=NOW, otp=otp, rain_service=_StubRain(None))
+    healthy = await evaluate_trip_alert(
+        alert, now=NOW, otp=otp, rain_service=_StubRain(_dry_forecast())
+    )
+
+    assert degraded is not None and degraded.forecast_degraded is True
+    assert healthy is not None and healthy.forecast_degraded is False
+
+
+async def test_skipping_on_a_missing_forecast_is_logged_not_silent(session, caplog):
+    # A dry day and a dead Buienradar both produce a quiet worker. Only one of them is
+    # normal, so the degraded case has to say so — otherwise an outage looks like good
+    # weather for as long as it lasts.
+    user = await _make_user(session)
+    alert = await _make_alert(session, user)
+    otp = _StubOTP(bike=_bike_itinerary(), transit=_tram_plan())
+
+    with caplog.at_level(logging.INFO, logger="app.services.notify"):
+        created = await process_trip_alert(
+            session,
+            alert,
+            now=NOW,
+            otp=otp,
+            rain_service=_StubRain(None),
+            notifier=_CapturingNotifier(),
+        )
+
+    assert created is None
+    assert any("no rain forecast available" in record.message for record in caplog.records)
+
+
 async def test_run_due_checks_isolates_a_failing_alert(session):
     # One alert whose OTP plan raises a NON-OTPError must not abort the sweep: the other due
     # rainy alert still gets exactly one notification, and run_due_checks does not raise.
@@ -418,6 +476,139 @@ async def test_delivery_failure_does_not_abort_or_lose_the_record(session):
         select(func.count()).select_from(Notification).where(Notification.trip_alert_id == alert.id)
     )
     assert count == 1
+    # ...and left unstamped, which is precisely what schedules the retry. A row that claimed
+    # delivery here would be the bug: recorded-as-sent, never actually sent.
+    assert await _delivered_at(session, created.id) is None
+
+
+async def _delivered_at(session, notification_id: int):
+    """Read `delivered_at` straight from the row, not from the in-memory instance.
+
+    The stamp is written by an UPDATE with the database's own `now()`, so asserting against
+    a re-read is the only way to prove the column really changed rather than an attribute.
+    """
+    return await session.scalar(
+        select(Notification.delivered_at).where(Notification.id == notification_id)
+    )
+
+
+async def test_successful_delivery_stamps_delivered_at(session):
+    # The happy path's half of the outbox contract: a send that works marks the row, so the
+    # next tick's redelivery pass leaves it alone.
+    user = await _make_user(session)
+    alert = await _make_alert(session, user)
+    notifier = _CapturingNotifier()
+
+    created = await process_trip_alert(
+        session,
+        alert,
+        now=NOW,
+        otp=_StubOTP(bike=_bike_itinerary(), transit=_tram_plan()),
+        rain_service=_StubRain(_wet_forecast()),
+        notifier=notifier,
+    )
+
+    assert created is not None
+    assert await _delivered_at(session, created.id) is not None
+    assert len(notifier.sent) == 1
+
+
+async def test_undelivered_row_is_redelivered_on_a_later_tick(session):
+    # The headline behaviour: a channel that blips during the sweep must not cost the user
+    # the alert. The first tick records it and fails to send; the next tick retries against a
+    # recovered channel and the warning finally arrives.
+    user = await _make_user(session)
+    alert = await _make_alert(session, user)
+    notifier = _FlakyNotifier(fail_times=1)
+
+    created = await process_trip_alert(
+        session,
+        alert,
+        now=NOW,
+        otp=_StubOTP(bike=_bike_itinerary(), transit=_tram_plan()),
+        rain_service=_StubRain(_wet_forecast()),
+        notifier=notifier,
+    )
+    assert created is not None
+    assert notifier.sent == []  # the first attempt failed
+    assert await _delivered_at(session, created.id) is None
+
+    redelivered = await redeliver_pending(session, now=NOW, notifier=notifier)
+
+    assert [n.id for n in redelivered] == [created.id]
+    assert [n.id for n in notifier.sent] == [created.id]
+    assert await _delivered_at(session, created.id) is not None
+
+
+async def test_redelivery_skips_rows_already_delivered(session):
+    # Redelivery must be driven by the stamp, not by "everything from today" — otherwise
+    # every tick would re-send every alert of the day.
+    user = await _make_user(session)
+    alert = await _make_alert(session, user)
+    notifier = _CapturingNotifier()
+    await process_trip_alert(
+        session,
+        alert,
+        now=NOW,
+        otp=_StubOTP(bike=_bike_itinerary(), transit=_tram_plan()),
+        rain_service=_StubRain(_wet_forecast()),
+        notifier=notifier,
+    )
+
+    redelivered = await redeliver_pending(session, now=NOW, notifier=notifier)
+
+    assert redelivered == []
+    assert len(notifier.sent) == 1  # still just the original send
+
+
+async def test_redelivery_ignores_alerts_for_a_departure_that_has_passed(session):
+    # A rain warning for a trip that already left is worse than no warning, so yesterday's
+    # undelivered rows age out instead of being retried forever.
+    user = await _make_user(session)
+    alert = await _make_alert(session, user)
+    stale = Notification(
+        trip_alert_id=alert.id,
+        user_id=user.id,
+        recommendation="transit",
+        reason="rain (~1.2 mm/h) -> take tram 13 (12 min)",
+        departure_date=NOW.date() - timedelta(days=1),
+    )
+    session.add(stale)
+    await session.flush()
+    notifier = _CapturingNotifier()
+
+    redelivered = await redeliver_pending(session, now=NOW, notifier=notifier)
+
+    assert redelivered == []
+    assert notifier.sent == []
+    assert await _delivered_at(session, stale.id) is None  # still on record as undelivered
+
+
+async def test_run_due_checks_retries_a_previous_ticks_failure(session):
+    # End to end through the worker's entry point: tick one records but can't send, tick two
+    # delivers it during the redelivery pass without creating a second row (the unique
+    # constraint still holds, so `created` is empty the second time).
+    user = await _make_user(session)
+    alert = await _make_alert(session, user)
+    otp = _StubOTP(bike=_bike_itinerary(), transit=_tram_plan())
+    rain = _StubRain(_wet_forecast())
+    notifier = _FlakyNotifier(fail_times=1)
+
+    first = await run_due_checks(
+        session, now=NOW, otp=otp, rain_service=rain, notifier=notifier, lead_minutes=15
+    )
+    second = await run_due_checks(
+        session, now=NOW, otp=otp, rain_service=rain, notifier=notifier, lead_minutes=15
+    )
+
+    assert len(first) == 1  # recorded on the first tick
+    assert second == []  # nothing new to record on the second
+    assert [n.id for n in notifier.sent] == [first[0].id]  # but it finally went out
+    assert await _delivered_at(session, first[0].id) is not None
+    total = await session.scalar(
+        select(func.count()).select_from(Notification).where(Notification.trip_alert_id == alert.id)
+    )
+    assert total == 1  # redelivery re-sends, it never re-records
 
 
 async def test_due_trip_alerts_handles_a_midnight_wrapping_window(session):

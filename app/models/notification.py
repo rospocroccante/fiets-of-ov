@@ -12,6 +12,12 @@ scheduler within the same day can never double-notify. `departure_date` is a pla
 (not a timestamp) precisely so the uniqueness is per *day*, independent of which scheduler
 tick first fired.
 
+`delivered_at` is what makes this a real outbox rather than a log: the row is committed
+first, delivery is attempted second, and only a *successful* send stamps the column. A NULL
+therefore means "recorded but not yet in the user's hands", which the worker re-attempts on
+its next tick — so a transient outage in the delivery channel self-heals instead of leaving
+a row that claims an alert was sent when it never arrived.
+
 Both foreign keys cascade on delete: removing a trip alert or a user drops the alerts we
 recorded for them, since an outbox row is meaningless without its trip and owner.
 `trip_alert_id` is indexed because lookups (and the FK itself) are by trip alert.
@@ -47,6 +53,13 @@ class Notification(Base):
     departure_date: Mapped[date] = mapped_column(Date)
     # Server-set send timestamp (now()), authoritative regardless of the worker's clock.
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # When the notifier confirmed delivery. NULL until then — deliberately *not* defaulted
+    # to now() on insert, because the row is written before the send is attempted and the
+    # whole point is to be able to tell the two apart. Nullable rather than a boolean so the
+    # timestamp doubles as the audit answer to "when did this actually go out?".
+    delivered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
 
     __table_args__ = (
         # Idempotency guard: one alert per trip per departure day. The notify service's

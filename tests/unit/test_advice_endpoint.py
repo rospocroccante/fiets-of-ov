@@ -285,6 +285,32 @@ def test_buienradar_down_degrades_to_bike():
     assert body["rain_expected"] is None
     assert body["max_rain_mm_per_h"] is None
     assert "unavailable" in body["reason"].lower()
+    # The explicit signal: without it a client has to infer "we couldn't check" from a pile
+    # of nulls, and the numbers alone look exactly like a clear afternoon.
+    assert body["forecast_degraded"] is True
+
+
+@respx.mock
+def test_working_forecast_is_not_flagged_as_degraded():
+    # The other half of the flag's contract: a forecast we actually read must never set it,
+    # or clients would caveat every answer and learn to ignore it.
+    respx.post(GQL_URL).mock(
+        side_effect=_otp_by_modes(
+            {
+                BIKE_MODES: httpx.Response(200, json=BIKE_JSON),
+                "TRANSIT,WALK": httpx.Response(200, json=TRANSIT_JSON),
+                "BICYCLE,TRANSIT,WALK": httpx.Response(200, json=MIXED_JSON),
+            }
+        )
+    )
+    respx.get(RAIN_URL).mock(return_value=httpx.Response(200, text=RAIN_DRY))
+
+    response = TestClient(app).get("/v1/advice", params={"from": "52.37,4.89", "to": "52.35,4.86"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["forecast_degraded"] is False
+    assert body["rain_expected"] is False  # genuinely dry, and we know it
 
 
 @respx.mock
@@ -295,6 +321,23 @@ def test_bike_routing_failure_returns_502():
     response = TestClient(app).get("/v1/advice", params={"from": "52.37,4.89", "to": "52.35,4.86"})
 
     assert response.status_code == 502
+    assert response.json()["detail"] == "routing upstream unavailable"
+
+
+@respx.mock
+def test_no_route_found_returns_404_not_502():
+    # OTP is healthy and simply has no way to make this trip. That is a property of the
+    # request, not an outage: a 502 here would tell the client to retry and would page
+    # whoever is on call, when the only useful action is to pick another destination.
+    respx.post(GQL_URL).mock(return_value=httpx.Response(200, json=_gql([])))
+    respx.get(RAIN_URL).mock(return_value=httpx.Response(200, text=RAIN_DRY))
+
+    response = TestClient(app).get("/v1/advice", params={"from": "52.37,4.89", "to": "52.35,4.86"})
+
+    assert response.status_code == 404
+    # A distinct detail string, so a client can tell the two failures apart without
+    # pattern-matching on status codes alone.
+    assert response.json()["detail"] == "no route found for this trip"
 
 
 @respx.mock

@@ -16,7 +16,12 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import create_access_token, hash_password, verify_password
+from app.core.security import (
+    create_access_token,
+    hash_password,
+    hash_password_async,
+    verify_password_async,
+)
 from app.db.session import get_session
 from app.models.user import User
 from app.schemas.auth import Token, UserCreate, UserOut
@@ -25,7 +30,9 @@ router = APIRouter(prefix="/v1/auth", tags=["auth"])
 
 # A real bcrypt hash that no real password matches, used to equalise login timing: when the
 # email is unknown we still run a verify against this so an attacker can't distinguish
-# "no such account" from "wrong password" by how long the request takes.
+# "no such account" from "wrong password" by how long the request takes. Computed once at
+# import with the synchronous helper — there is no event loop to protect at module scope,
+# and paying the bcrypt cost here keeps it off the first login instead of every one.
 _DUMMY_PASSWORD_HASH = hash_password("not-a-real-password-timing-equaliser")
 
 
@@ -40,8 +47,20 @@ async def register(
     is a 409: the unique index on `users.email` is the source of truth, so we let the
     insert hit it and translate the `IntegrityError` rather than racing a prior SELECT —
     that closes the check-then-insert window two concurrent registrations could exploit.
+
+    That 409 is a deliberate tradeoff: it tells an unauthenticated caller that an address is
+    registered, which is account enumeration. We accept it because the alternative — a
+    generic 201 followed by a "check your inbox" email — needs a mail channel the MVP does
+    not have, and would leave a user who simply forgot they had signed up with no way to
+    find out. Login (`/token`) is *not* an enumeration oracle, so the exposure is limited to
+    this one endpoint.
+
+    Timing is equalised across both outcomes: the hash is computed **before** the insert, so
+    the duplicate path pays exactly the same ~100–300 ms of bcrypt as the success path.
+    Keep that ordering — moving the hash after a uniqueness check would turn the 409 into a
+    fast path and hand an attacker a cheap way to sweep addresses.
     """
-    user = User(email=body.email, hashed_password=hash_password(body.password))
+    user = User(email=body.email, hashed_password=await hash_password_async(body.password))
     session.add(user)
     try:
         await session.flush()
@@ -85,9 +104,12 @@ async def login(
     if user is None:
         # No such account. Still spend a bcrypt verify against a dummy hash so the timing
         # is indistinguishable from a wrong-password attempt (no user-enumeration oracle).
-        verify_password(form.password, _DUMMY_PASSWORD_HASH)
+        # It goes through the same off-thread helper as the real verify below, so the two
+        # paths cost the same wall-clock time — offloading one but not the other would
+        # itself become the timing signal we are trying to erase.
+        await verify_password_async(form.password, _DUMMY_PASSWORD_HASH)
         raise invalid_credentials
-    if not verify_password(form.password, user.hashed_password):
+    if not await verify_password_async(form.password, user.hashed_password):
         raise invalid_credentials
 
     return Token(access_token=create_access_token(subject=str(user.id)))

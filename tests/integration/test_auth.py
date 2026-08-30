@@ -68,6 +68,49 @@ async def test_register_duplicate_email_conflicts(session):
     assert second.status_code == 409
 
 
+async def test_register_pays_the_same_hash_cost_on_the_duplicate_path(session, monkeypatch):
+    """A 409 must not be measurably cheaper than a 201.
+
+    The 409 already tells a caller that an address is registered; that tradeoff is
+    documented and accepted. What must not *also* leak is timing — if the duplicate path
+    skipped the ~100-300 ms bcrypt hash, an attacker could sweep a wordlist far faster than
+    the endpoint's own throughput suggests, and could do it even against a rate limiter
+    tuned to the success path's cost.
+
+    Asserted through a call count rather than a stopwatch: the ordering in `register` (hash,
+    then insert) is the mechanism, and a clock-based assertion would be flaky on a shared
+    runner while proving less.
+    """
+    from app.api import auth as auth_module
+
+    calls: list[str] = []
+    real_hash = auth_module.hash_password_async
+
+    async def _counting_hash(password: str) -> str:
+        calls.append(password)
+        return await real_hash(password)
+
+    monkeypatch.setattr(auth_module, "hash_password_async", _counting_hash)
+
+    try:
+        async with _client(session) as client:
+            created = await client.post(
+                "/v1/auth/register",
+                json={"email": "timing@example.com", "password": "firstsecret"},
+            )
+            duplicate = await client.post(
+                "/v1/auth/register",
+                json={"email": "timing@example.com", "password": "secondsecret"},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert created.status_code == 201
+    assert duplicate.status_code == 409
+    # One hash per request, the rejected one included — the two paths cost the same.
+    assert calls == ["firstsecret", "secondsecret"]
+
+
 async def test_token_with_valid_credentials_returns_bearer(session):
     try:
         async with _client(session) as client:
@@ -87,6 +130,50 @@ async def test_token_with_valid_credentials_returns_bearer(session):
     body = response.json()
     assert body["token_type"] == "bearer"
     assert isinstance(body["access_token"], str) and body["access_token"]
+
+
+async def test_login_verifies_a_dummy_hash_for_an_unknown_email(session, monkeypatch):
+    """An unknown email must cost the same bcrypt verify as a wrong password.
+
+    Both paths now run that verify on a worker thread. Offloading only one of them would
+    have re-created the very timing oracle the dummy hash exists to close, so assert the
+    unknown-email request really does spend a verify — and against the dummy hash, not
+    against nothing.
+    """
+    from app.api import auth as auth_module
+
+    verified: list[str] = []
+    real_verify = auth_module.verify_password_async
+
+    async def _counting_verify(password: str, hashed: str) -> bool:
+        verified.append(hashed)
+        return await real_verify(password, hashed)
+
+    monkeypatch.setattr(auth_module, "verify_password_async", _counting_verify)
+
+    try:
+        async with _client(session) as client:
+            await client.post(
+                "/v1/auth/register",
+                json={"email": "known@example.com", "password": "rightpassword"},
+            )
+            unknown = await client.post(
+                "/v1/auth/token",
+                data={"username": "nobody@example.com", "password": "whatever"},
+            )
+            wrong = await client.post(
+                "/v1/auth/token",
+                data={"username": "known@example.com", "password": "wrongpassword"},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    # Identical opaque rejection, and one verify spent on each — no enumeration oracle in
+    # either the body or the clock.
+    assert (unknown.status_code, wrong.status_code) == (401, 401)
+    assert unknown.json()["detail"] == wrong.json()["detail"]
+    assert len(verified) == 2
+    assert verified[0] == auth_module._DUMMY_PASSWORD_HASH
 
 
 async def test_token_with_wrong_password_unauthorized(session):
