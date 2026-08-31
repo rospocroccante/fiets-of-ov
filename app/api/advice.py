@@ -31,8 +31,8 @@ router = APIRouter()
 
 @router.get("/v1/advice", response_model=AdviceResponse)
 async def get_advice(
-    origin: str = Query(alias="from"),
-    destination: str = Query(alias="to"),
+    origin: str = Query(alias="from", min_length=1, max_length=200),
+    destination: str = Query(alias="to", min_length=1, max_length=200),
     otp: OTPClient = Depends(get_otp_client),
     rain_service: RainService = Depends(get_rain_service),
     geocoder: GeocoderClient = Depends(get_geocoder_client),

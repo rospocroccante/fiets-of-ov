@@ -17,7 +17,7 @@ from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.clients.buienradar import BuienradarClient
-from app.clients.geocoder import GeocodeNotFound, GeocoderClient
+from app.clients.geocoder import GeocodeNotFound, GeocoderClient, GeocoderError
 from app.clients.otp import OTPClient
 from app.core.cache import Cache, RedisCache
 from app.core.config import get_settings
@@ -83,8 +83,9 @@ async def resolve_place_http(value: str, geocoder: GeocoderClient) -> tuple[floa
 
     Delegates the parse-or-geocode decision to `resolve_place` (deliberately
     HTTP-agnostic); this wrapper owns the one status mapping every router shares: an
-    unresolvable name is the caller's mistake (400), a geocoder outage is an upstream
-    failure (502). Shared by /v1/advice, /v1/plan and /v1/trip-alerts so the three
+    unresolvable name is the caller's mistake (400), a geocoder outage or a garbled
+    Nominatim response is an upstream failure (502). Shared by /v1/advice, /v1/plan and
+    /v1/trip-alerts so the three
     endpoints cannot drift apart in how they report geocoding failures.
     """
     try:
@@ -94,7 +95,7 @@ async def resolve_place_http(value: str, geocoder: GeocoderClient) -> tuple[floa
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"could not find a place named {value!r}",
         ) from exc
-    except httpx.HTTPError as exc:
+    except (GeocoderError, httpx.HTTPError) as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="geocoding upstream unavailable",

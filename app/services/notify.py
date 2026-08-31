@@ -57,11 +57,10 @@ async def due_trip_alerts(
 ) -> list[TripAlert]:
     """Return the trip alerts due to be checked at `now`.
 
-    An alert is due when:
-    - its recurrence `days` contains today's ISO weekday (`now.isoweekday()`, 1=Mon..7=Sun),
-      so it actually runs today; and
-    - its `departure_time` falls within `[now.time(), (now + lead).time()]` — i.e. the trip
-      departs within the next `lead_minutes`, giving the rider time to act on the alert.
+    An alert is due when its `departure_time` falls within the next `lead_minutes`
+    (giving the rider time to act) *and* its recurrence `days` contains the ISO weekday
+    (1=Mon..7=Sun) of the day that departure actually lands on — today, or tomorrow for
+    the post-midnight tail of a wrapped window.
 
     Args:
         session: the async DB session to query on.
@@ -71,32 +70,50 @@ async def due_trip_alerts(
     Returns:
         The matching `TripAlert` rows (unordered).
 
-    Midnight: when the lead window crosses 24:00 (e.g. now=23:55, lead=15 -> 23:55..00:10) it
-    is split into two non-wrapping ranges so a late-night departure isn't silently missed.
-    The weekday is still today's (a same-day late-night trip is the realistic case); a trip
-    that recurs only on *tomorrow* and departs 00:00–00:10 is instead caught by the next
-    tick's non-wrapping window, so it is never lost.
+    Midnight: when the lead window crosses 24:00 (e.g. now=23:55, lead=15 -> 23:55..00:10)
+    it is split into two non-wrapping ranges, each matched against its own weekday: the
+    pre-midnight part against *today*, the post-midnight part against *tomorrow*. A 00:05
+    departure seen from Monday 23:55 belongs to a Tuesday recurrence — matching it against
+    Monday would both fire Monday-only alerts a day early (for a departure 23h50m in the
+    past) and skip Tuesday-only ones entirely.
     """
     weekday = now.isoweekday()
     window_start = now.time()
     window_end = (now + timedelta(minutes=lead_minutes)).time()
 
+    # `days` is a Postgres SmallInteger ARRAY; `.any(weekday)` -> "weekday = ANY(days)".
     if window_end < window_start:
-        # Wrapped past midnight: match [window_start, 23:59:59] OR [00:00, window_end].
-        time_cond = or_(
-            TripAlert.departure_time >= window_start,
-            TripAlert.departure_time <= window_end,
+        # Wrapped past midnight: [window_start, 23:59:59] belongs to today's recurrence,
+        # [00:00, window_end] to tomorrow's — each portion carries its own weekday, so a
+        # Monday-only 00:05 alert is due Sunday night, not Monday night.
+        tomorrow = (now + timedelta(days=1)).isoweekday()
+        due_cond = or_(
+            and_(TripAlert.days.any(weekday), TripAlert.departure_time >= window_start),
+            and_(TripAlert.days.any(tomorrow), TripAlert.departure_time <= window_end),
         )
     else:
-        time_cond = and_(
+        due_cond = and_(
+            TripAlert.days.any(weekday),
             TripAlert.departure_time >= window_start,
             TripAlert.departure_time <= window_end,
         )
 
-    # `days` is a Postgres SmallInteger ARRAY; `.any(weekday)` -> "weekday = ANY(days)".
-    stmt = select(TripAlert).where(TripAlert.days.any(weekday), time_cond)
+    stmt = select(TripAlert).where(due_cond)
     result = await session.execute(stmt)
     return list(result.scalars().all())
+
+
+def _next_departure(alert: TripAlert, now: datetime) -> datetime:
+    """The departure moment `alert` refers to at `now`.
+
+    Today at `departure_time` — or tomorrow when that time has already passed, which is
+    exactly the post-midnight tail a wrapped lead window selects (see `due_trip_alerts`):
+    at Monday 23:55 a 00:05 alert means *Tuesday* 00:05, not a moment 23h50m in the past.
+    """
+    date = now.date()
+    if alert.departure_time < now.time():
+        date += timedelta(days=1)
+    return datetime.combine(date, alert.departure_time, tzinfo=AMS)
 
 
 async def evaluate_trip_alert(
@@ -107,7 +124,7 @@ async def evaluate_trip_alert(
     Bike routing is still mandatory: without a bike candidate there is nothing to assess
     against the rain, so we skip the alert (return None).
     """
-    departure = datetime.combine(now.date(), alert.departure_time, tzinfo=AMS)
+    departure = _next_departure(alert, now)
     origin = (alert.origin_lat, alert.origin_lon)
     destination = (alert.dest_lat, alert.dest_lon)
 
@@ -163,7 +180,8 @@ async def process_trip_alert(
     Args:
         session: the async DB session (its transaction is committed on insert).
         alert: the trip alert to process.
-        now: the current moment, Amsterdam-aware; `now.date()` is the departure day key.
+        now: the current moment, Amsterdam-aware. The departure day key is today — or
+            tomorrow for a post-midnight departure caught by a wrapped lead window.
         otp: OTP client (see `evaluate_trip_alert`).
         rain_service: rain service (see `evaluate_trip_alert`).
         notifier: delivery channel with `async send(notification)`.
@@ -190,7 +208,7 @@ async def process_trip_alert(
     if advice.rain_expected is not True:
         return None
 
-    departure_date = now.date()
+    departure_date = _next_departure(alert, now).date()
     # on_conflict_do_nothing makes the unique (trip_alert_id, departure_date) constraint the
     # idempotency guard; .returning(Notification) hands back the full inserted row in the
     # same round trip (no follow-up SELECT) and is non-empty only when this insert actually

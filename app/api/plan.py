@@ -68,8 +68,15 @@ def _itinerary_out(itin: Itinerary) -> ItineraryOut:
 
 @router.get("/v1/plan", response_model=PlanResponse)
 async def get_plan(
-    origin: str = Query(alias="from", description="Origin: place name or 'lat,lon'"),
-    destination: str = Query(alias="to", description="Destination: place name or 'lat,lon'"),
+    origin: str = Query(
+        alias="from", min_length=1, max_length=200, description="Origin: place name or 'lat,lon'"
+    ),
+    destination: str = Query(
+        alias="to",
+        min_length=1,
+        max_length=200,
+        description="Destination: place name or 'lat,lon'",
+    ),
     otp: OTPClient = Depends(get_otp_client),
     rain_service: RainService = Depends(get_rain_service),
     geocoder: GeocoderClient = Depends(get_geocoder_client),

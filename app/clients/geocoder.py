@@ -13,7 +13,8 @@ Quirks worth knowing (and why this wrapper exists):
 - Results come back as a JSON list, best match first, with `lat`/`lon` as **strings**.
   An empty list means "no match" — we raise `GeocodeNotFound` (a caller input problem),
   distinct from a transport/HTTP failure, which propagates as `httpx.HTTPError` (an
-  upstream problem). Callers map these to 400 vs 502 respectively.
+  upstream problem). A 2xx body that isn't the documented JSON shape raises
+  `GeocoderError` (also an upstream problem). Callers map these to 400 vs 502.
 - We bound the search to the Amsterdam bbox (`viewbox` + `bounded=1`, `countrycodes=nl`)
   so a bare "Centraal" resolves to Amsterdam Centraal, not a same-named place elsewhere.
 """
@@ -33,6 +34,15 @@ _CACHE_MAX_ENTRIES = 512
 
 class GeocodeNotFound(Exception):
     """Raised when a place name matches no location within the Amsterdam bounds."""
+
+
+class GeocoderError(Exception):
+    """Raised when Nominatim responds 2xx but the payload isn't the shape it documents.
+
+    Distinct from `httpx.HTTPError` (transport / non-2xx) only in origin; both are
+    upstream faults and callers map both to 502. Without this wrapper a proxy's HTML
+    error page or a schema change would surface as a bare `ValueError`/`KeyError` — a
+    500 that blames us for Nominatim's garbage."""
 
 
 class GeocoderClient:
@@ -77,8 +87,9 @@ class GeocoderClient:
     async def geocode(self, query: str) -> tuple[float, float]:
         """Return `(lat, lon)` for `query`, bounded to Amsterdam.
 
-        Raises `GeocodeNotFound` if nothing matches, or `httpx.HTTPError` if the request
-        fails or returns a non-2xx status. Repeat lookups are served from the cache.
+        Raises `GeocodeNotFound` if nothing matches, `httpx.HTTPError` if the request
+        fails or returns a non-2xx status, or `GeocoderError` if a 2xx payload is not
+        the JSON shape Nominatim documents. Repeat lookups are served from the cache.
         """
         key = query.strip().lower()
         if key in self._cache:
@@ -94,13 +105,19 @@ class GeocoderClient:
         }
         response = await self._http().get(self._base_url, params=params)
         response.raise_for_status()
-        results = response.json()
+        try:
+            results = response.json()
+        except ValueError as exc:
+            raise GeocoderError(f"Nominatim returned non-JSON: {exc}") from exc
 
         if not results:
             raise GeocodeNotFound(f"no Amsterdam location found for {query!r}")
 
-        top = results[0]
-        coords = (float(top["lat"]), float(top["lon"]))
+        try:
+            top = results[0]
+            coords = (float(top["lat"]), float(top["lon"]))
+        except (KeyError, IndexError, TypeError, ValueError) as exc:
+            raise GeocoderError(f"Nominatim returned a malformed result: {exc}") from exc
         self._cache[key] = coords
         if len(self._cache) > _CACHE_MAX_ENTRIES:
             # Evict the oldest inserted entry (dicts keep insertion order) so the cache

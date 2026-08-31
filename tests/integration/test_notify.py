@@ -28,6 +28,7 @@ from app.models.notification import Notification
 from app.models.trip_alert import TripAlert
 from app.models.user import User
 from app.services.notify import (
+    _next_departure,
     due_trip_alerts,
     evaluate_trip_alert,
     process_trip_alert,
@@ -613,11 +614,31 @@ async def test_run_due_checks_retries_a_previous_ticks_failure(session):
 
 async def test_due_trip_alerts_handles_a_midnight_wrapping_window(session):
     # now=23:55 with lead 15 -> window 23:55..00:10 wraps past midnight. A trip departing
-    # 23:58 today must still be found (the naive between-comparison would miss it).
+    # 23:58 today must still be found (the naive between-comparison would miss it), and the
+    # post-midnight tail belongs to *tomorrow's* recurrence: a Tuesday-only 00:05 departure
+    # is due now, while a Monday-only 00:05 one is not (Monday's ran 23h50m ago; its next
+    # occurrence is due Sunday night).
     late_now = datetime(*DAY, 23, 55, tzinfo=AMS)  # 2026-06-01 is a Monday (ISO 1)
     user = await _make_user(session)
-    alert = await _make_alert(session, user, departure_time=time(23, 58), days=[1])
+    same_day = await _make_alert(session, user, departure_time=time(23, 58), days=[1])
+    tomorrow_only = await _make_alert(session, user, departure_time=time(0, 5), days=[2])
+    today_only_past = await _make_alert(session, user, departure_time=time(0, 5), days=[1])
 
     result = await due_trip_alerts(session, now=late_now, lead_minutes=15)
 
-    assert alert.id in {a.id for a in result}
+    ids = {a.id for a in result}
+    assert same_day.id in ids
+    assert tomorrow_only.id in ids  # 00:05 lands on Tuesday and the alert recurs on Tuesdays
+    assert today_only_past.id not in ids  # Monday-only: its 00:05 departure already happened
+
+
+def test_next_departure_rolls_past_midnight_to_tomorrow():
+    # The wrapped window's post-midnight tail must be planned — and idempotency-keyed —
+    # on tomorrow's date: at Monday 23:55 a 00:05 alert means Tuesday 00:05, not a moment
+    # 23h50m in the past (which OTP would happily "plan" with stale results).
+    late_now = datetime(*DAY, 23, 55, tzinfo=AMS)
+    past_midnight = TripAlert(departure_time=time(0, 5))
+    still_today = TripAlert(departure_time=time(23, 58))
+
+    assert _next_departure(past_midnight, late_now) == datetime(2026, 6, 2, 0, 5, tzinfo=AMS)
+    assert _next_departure(still_today, late_now) == datetime(2026, 6, 1, 23, 58, tzinfo=AMS)

@@ -298,6 +298,11 @@ class OTPClient:
         except httpx.HTTPError as exc:
             # Covers connect/read timeouts, connection errors, and non-2xx statuses.
             raise OTPError(f"OTP request failed: {exc}") from exc
+        except ValueError as exc:
+            # A 2xx whose body isn't JSON (proxy error page, truncated response): same
+            # untrusted-upstream failure mode as a malformed itinerary below, so it must
+            # surface as OTPError — not leak to callers that only guard against OTPError.
+            raise OTPError(f"OTP returned non-JSON: {exc}") from exc
 
         if data.get("errors"):
             raise OTPError(f"OTP GraphQL errors: {data['errors']}")

@@ -11,7 +11,7 @@ import httpx
 import pytest
 import respx
 
-from app.clients.geocoder import GeocodeNotFound, GeocoderClient
+from app.clients.geocoder import GeocodeNotFound, GeocoderClient, GeocoderError
 
 URL = "https://nominatim.test/search"
 UA = "fiets-of-ov-test/0.1"
@@ -90,3 +90,24 @@ async def test_geocode_cache_is_bounded():
     assert len(client._cache) <= 512
     assert "place 0" not in client._cache  # the oldest entry was evicted
     assert "place 599" in client._cache  # the newest is still cached
+
+
+@respx.mock
+async def test_geocode_raises_geocoder_error_on_non_json_200():
+    # A 2xx whose body isn't JSON (proxy error page, truncated response) is an upstream
+    # fault: it must surface as GeocoderError (502-class), not a bare ValueError (500).
+    respx.get(URL).mock(return_value=httpx.Response(200, text="<html>gateway error</html>"))
+
+    with pytest.raises(GeocoderError):
+        await GeocoderClient(base_url=URL, user_agent=UA).geocode("Amsterdam Centraal")
+
+
+@respx.mock
+async def test_geocode_raises_geocoder_error_on_malformed_result():
+    # Same for a JSON body that isn't the documented shape (missing lat/lon, wrong types).
+    respx.get(URL).mock(
+        return_value=httpx.Response(200, json=[{"display_name": "no coordinates here"}])
+    )
+
+    with pytest.raises(GeocoderError):
+        await GeocoderClient(base_url=URL, user_agent=UA).geocode("Amsterdam Centraal")

@@ -71,8 +71,11 @@ class Settings(BaseSettings):
     # (~5 min matches Buienradar's own update cadence).
     rain_cache_fresh_seconds: int = 300
     # How long a forecast is retained for stale-fallback use when Buienradar is down.
-    # Beyond ~2h the forecast horizon is exhausted, so keeping it longer is pointless.
-    rain_cache_retention_seconds: int = 7200
+    # Buienradar's horizon is ~2h from fetch time and advice reasons over the *next*
+    # ~30-60 min, so a 2h-old forecast no longer covers the ride at all — yet a stale
+    # hit is served as a confident, non-degraded answer. 45 min keeps ~1h of genuine
+    # horizon over the cycling window; beyond that, degrading honestly beats guessing.
+    rain_cache_retention_seconds: int = 2700
 
     # Browser origins allowed to call this API cross-origin. Defaults to the Vite dev server
     # so a locally running frontend works out of the box. Always an explicit allowlist: the
